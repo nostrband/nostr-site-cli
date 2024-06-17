@@ -499,8 +499,10 @@ async function publishTheme(dir, latest, reupload) {
     const file = new File([toArrayBuffer(content)], name);
     if (name.toLowerCase() === "readme" || name.toLowerCase() === "readme.md")
       readme = content.toString("utf-8");
-    if (name === "package.json")
+    if (name === "package.json") {
       packageJson = JSON.parse(content.toString("utf-8"));
+      console.log("package", packageJson);
+    }
 
     const mime = getMime(name);
     const hash = await BlossomClient.getFileSha256(file);
@@ -1081,13 +1083,13 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
     // sitemap
-    let paths = await renderer.getSiteMap();
-    if (onlyPaths.length > 0) {
-      paths = paths.filter((p) => onlyPaths.includes(p));
-    }
+    const sitemapPaths = await renderer.getSiteMap();
+    const paths = sitemapPaths.filter((p) => !onlyPaths.length || onlyPaths.includes(p));
     console.warn("paths", paths);
+    if (paths.length < onlyPaths)
+      console.warn("BAD paths", paths, "expected", onlyPaths, "sitemap", sitemapPaths);
 
-    const sitemap = paths
+    const sitemap = sitemapPaths
       .map((p) => `${renderer.settings.origin}${p}`)
       .join("\n");
     fs.writeFileSync(`${dir}/sitemap.txt`, sitemap, { encoding: "utf-8" });
