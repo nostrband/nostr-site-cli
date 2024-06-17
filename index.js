@@ -4,7 +4,7 @@ dotenv.config({ path: "./.env.local" });
 import WebSocket from "ws";
 global.WebSocket ??= WebSocket;
 
-import crypto from "node:crypto";
+//import crypto from "node:crypto";
 //global.crypto = crypto;
 
 import { File, Blob } from "@web-std/file";
@@ -65,7 +65,6 @@ import NDK, {
   NDKRelaySet,
   NDKRelay,
   NDKRelayStatus,
-  NDKRelayAuthPolicies,
 } from "@nostr-dev-kit/ndk";
 import {
   nip19,
@@ -287,9 +286,6 @@ async function uploadBlossomFile({
       },
     });
 
-    // await HTTPError.handleErrorResponse(res);
-    // const res = await res.json();
-
     const reply = await res.json();
     console.log(entry, "upload reply", reply);
     if (reply.url) return true;
@@ -452,6 +448,7 @@ async function publishTheme(dir, latest, reupload) {
 
     // sass should be built into css
     if (file.endsWith(".scss")) return;
+    if (file.endsWith(".sass")) return;
 
     // fonts should be inlined
     if (file.endsWith(".woff")) return;
