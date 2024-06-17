@@ -2316,7 +2316,7 @@ async function ssrWatch() {
             const parser = new NostrParser(url);
             const addr = parseAddr(naddr);
             const site = parser.parseSite(addr, s);
-            parser.setConfig(site.config);
+            parser.setSite(site);
             s.store = new NostrStore("preview", ndk, site, parser);
           }
           if (!s.store.matchObject(e)) continue;
