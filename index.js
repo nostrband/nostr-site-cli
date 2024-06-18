@@ -1081,10 +1081,19 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
 
     // sitemap
     const sitemapPaths = await renderer.getSiteMap();
-    const paths = sitemapPaths.filter((p) => !onlyPaths.length || onlyPaths.includes(p));
+    const paths = sitemapPaths.filter(
+      (p) => !onlyPaths.length || onlyPaths.includes(p)
+    );
     console.warn("paths", paths);
     if (paths.length < onlyPaths)
-      console.warn("BAD paths", paths, "expected", onlyPaths, "sitemap", sitemapPaths);
+      console.warn(
+        "BAD paths",
+        paths,
+        "expected",
+        onlyPaths,
+        "sitemap",
+        sitemapPaths
+      );
 
     const sitemap = sitemapPaths
       .map((p) => `${renderer.settings.origin}${p}`)
@@ -1173,7 +1182,7 @@ async function releaseWebsite(naddr, paths, preview = false) {
   const domain = url.hostname.split(".")[0];
   await uploadWebsite(dir, domain);
 
-//  fs.rmSync(dir, { recursive: true });
+  //  fs.rmSync(dir, { recursive: true });
   console.warn(Date.now(), "done uploading", naddr, site.origin);
 }
 
@@ -1295,40 +1304,45 @@ function slugify(str, options = {}) {
   return str;
 }
 
-export async function fetchAuthed({
-  ndk,
-  url,
-  method = 'GET',
-  body,
-  pow = 0,
-}) {
+export async function fetchAuthed({ ndk, url, method = "GET", body, pow = 0 }) {
   const pubkey = (await signer.user()).pubkey;
-  
+
   let authEvent = new NDKEvent(ndk, {
     pubkey,
     kind: 27235,
     created_at: Math.floor(Date.now() / 1000),
-    content: '',
+    content: "",
     tags: [
-      ['u', url],
-      ['method', method],
+      ["u", url],
+      ["method", method],
     ],
-  })
-  if (body) authEvent.tags.push(['payload', Buffer.from(sha256(body)).toString('hex')])
+  });
+  if (body)
+    authEvent.tags.push(["payload", Buffer.from(sha256(body)).toString("hex")]);
 
   // generate pow on auth event
   if (pow) {
-    const start = Date.now()
-    const powEvent = authEvent.rawEvent()
-    const minedEvent = minePow(powEvent, pow)
-    console.log('mined pow of', pow, 'in', Date.now() - start, 'ms', minedEvent)
+    const start = Date.now();
+    const powEvent = authEvent.rawEvent();
+    const minedEvent = minePow(powEvent, pow);
+    console.log(
+      "mined pow of",
+      pow,
+      "in",
+      Date.now() - start,
+      "ms",
+      minedEvent
+    );
     authEvent = new NDKEvent(ndk, minedEvent);
   }
 
-  authEvent.sig = await authEvent.sign(signer)
+  authEvent.sig = await authEvent.sign(signer);
   console.log("signed", JSON.stringify(authEvent.rawEvent()));
 
-  const auth = Buffer.from(JSON.stringify(authEvent.rawEvent()), 'utf-8').toString('base64');
+  const auth = Buffer.from(
+    JSON.stringify(authEvent.rawEvent()),
+    "utf-8"
+  ).toString("base64");
 
   return await fetch(url, {
     method,
@@ -1345,14 +1359,13 @@ async function getSessionToken() {
   const pubkey = (await signer.user()).pubkey;
   const ndk = new NDK();
   let pow = MIN_POW;
-  let token = '';
-  do
-  {
+  let token = "";
+  do {
     try {
       const r = await fetchAuthed({
-        ndk, 
+        ndk,
         url: `${NPUB_PRO_API}/auth?npub=${nip19.npubEncode(pubkey)}`,
-        pow
+        pow,
       });
       if (r.status === 200) {
         console.log("r", r.headers.getSetCookie());
@@ -1360,7 +1373,7 @@ async function getSessionToken() {
         const cs = cookie.parse(r.headers.getSetCookie()[0]);
         console.log("result", cs);
         token = cs.token;
-        break;  
+        break;
       } else if (r.status === 403) {
         const rep = await r.json();
         console.log("need more pow", rep);
@@ -1384,9 +1397,14 @@ async function fetchWithSession(url) {
   const token = fs.readFileSync(file);
   return fetch(url, {
     headers: {
-      "cookie": `token=${token}`,
-    }
-  }).then((r) => { console.log("reply", r); return r.json()}).catch(e => console.error("error", e))
+      cookie: `token=${token}`,
+    },
+  })
+    .then((r) => {
+      console.log("reply", r);
+      return r.json();
+    })
+    .catch((e) => console.error("error", e));
 }
 
 async function testDeploy(pubkey, kinds, hashtags, themePackageId) {
@@ -1622,6 +1640,8 @@ async function putDomainInfo(info, status, expires, s3) {
 async function sendReply(res, reply, status) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization");
   res.writeHead(status || 200);
   res.end(JSON.stringify(reply));
 }
@@ -1869,9 +1889,8 @@ async function verifyAuthNostr(req, npub, path, minPow = 0) {
     if (method !== req.method) return false;
 
     const url = new URL(u);
-    console.log({ url })
-    if (url.origin !== NPUB_PRO_API || url.pathname !== path)
-      return false;
+    console.log({ url });
+    if (url.origin !== NPUB_PRO_API || url.pathname !== path) return false;
 
     if (req.body && req.body.length > 0) {
       const hash = digest("sha256", req.body.toString());
@@ -1920,10 +1939,13 @@ async function apiAuth(req, res) {
   ipPows.set(ip, { pow: minPow, tm: Date.now() });
 
   // set token
-  res.setHeader('Set-Cookie', cookie.serialize('token', token, {
-    httpOnly: true,
-    maxAge: SESSION_TTL
-  }));
+  res.setHeader(
+    "Set-Cookie",
+    cookie.serialize("token", token, {
+      httpOnly: true,
+      maxAge: SESSION_TTL,
+    })
+  );
 
   sendReply(res, { ok: true });
 }
@@ -1936,7 +1958,10 @@ async function api(host, port) {
   const requestListener = async function (req, res) {
     console.log("request", req.url, req.headers);
     try {
-      if (req.url.startsWith("/reserve")) {
+      if (req.method === "OPTIONS") {
+        // preflight
+        sendReply(res, {}, 200);
+      } else if (req.url.startsWith("/reserve")) {
         // reserve with a single writer
         await mutex.run(() => apiReserve(req, res, s3, prisma));
       } else if (req.url.startsWith("/deploy")) {
@@ -1944,13 +1969,11 @@ async function api(host, port) {
       } else if (req.url.startsWith("/auth")) {
         await apiAuth(req, res);
       } else {
-        res.writeHead(400);
-        res.end("Unknown method");
+        sendError(res, "Unknown method", 400);
       }
     } catch (e) {
       console.error("error", req.url, e);
-      res.writeHead(500);
-      res.end("Server-side error, try again later");
+      sendError(res, "Server-side error, try again later", 500);
     }
   };
 
@@ -1961,7 +1984,7 @@ async function api(host, port) {
 }
 
 async function fetchRelayFilterSince(ndk, relay, f, since, abortPromises) {
-  console.log("fetch since", since);
+  console.log("fetch since", since, relay);
   let until = undefined;
   let queue = [];
   do {
@@ -2392,13 +2415,13 @@ async function ssrRender() {
         console.log("rendering", d.domain, naddr, "paths", paths.length);
         await releaseWebsite(naddr, paths);
       };
-  
+
       // full rerender?
       if (d.updated >= d.rendered) {
         // get current last eventQueue.id,
         // then after we're done remove all events
         // scheduled for this site w/ id <= last_id
-  
+
         const lastEvent = await prisma.eventQueue.findFirst({
           where: {
             domain: d.domain,
@@ -2409,12 +2432,12 @@ async function ssrRender() {
             },
           ],
         });
-  
+
         const tm = Math.floor(Date.now() / 1000);
-  
+
         // full rerender
         await render([]);
-  
+
         // clear event queue before this render
         if (lastEvent) {
           console.log(
@@ -2432,7 +2455,7 @@ async function ssrRender() {
             },
           });
         }
-  
+
         // mark as rendered
         await prisma.domain.update({
           where: { domain: d.domain },
@@ -2445,18 +2468,18 @@ async function ssrRender() {
             domain: d.domain,
           },
         });
-  
+
         let lastId = 0;
         const paths = ["/"];
         for (const e of events) {
           if (e.id > lastId) lastId = e.id;
           paths.push(`/post/${e.eventId}`);
         }
-  
+
         if (lastId) {
           // rerender new events
           await render(paths);
-  
+
           console.log("delete events queue until", lastId, "site", d.domain);
           await prisma.eventQueue.deleteMany({
             where: {
@@ -2470,7 +2493,7 @@ async function ssrRender() {
       }
     }
 
-    await new Promise(ok => setTimeout(ok, 10000));
+    await new Promise((ok) => setTimeout(ok, 10000));
   }
 }
 
@@ -2498,6 +2521,40 @@ function testRGB(str) {
   );
 }
 
+async function getThemeByName(name, ndk = null) {
+  ndk =
+    ndk ||
+    new NDK({
+      explicitRelayUrls: [...OUTBOX_RELAYS, SITE_RELAY],
+    });
+  ndk.connect();
+
+  const themeSet = await ndk.fetchEvents(
+    {
+      // @ts-ignore
+      kinds: [KIND_THEME],
+      "#d": [name],
+    },
+    { groupable: false },
+    NDKRelaySet.fromRelayUrls([SITE_RELAY], ndk)
+  );
+  const themes = [...themeSet];
+  console.log(
+    "themes",
+    themes.map((t) => ({
+      name: tv(t, "d"),
+      pubkey: t.pubkey,
+    }))
+  );
+  if (!themes.length) throw new Error("Theme not found");
+  if (themes.length > 1) throw new Error("More than 1 theme");
+
+  const themeId = tv(themes[0], "e");
+
+  console.log("theme package id", themeId, "theme addr", eventId(themes[0]));
+  return themeId;
+}
+
 async function publishSiteEvent(pubkey, kinds, hashtags, themeId, domain) {
   await ensureAuth();
 
@@ -2511,30 +2568,7 @@ async function publishSiteEvent(pubkey, kinds, hashtags, themeId, domain) {
   const relays = await fetchOutboxRelays(ndk, [adminPubkey]);
   console.log("admin relays", relays);
 
-  if (themeId.length !== 64) {
-    const themeSet = await ndk.fetchEvents(
-      {
-        // @ts-ignore
-        kinds: [KIND_THEME],
-        "#d": [themeId],
-      },
-      { groupable: false },
-      NDKRelaySet.fromRelayUrls([SITE_RELAY], ndk)
-    );
-    const themes = [...themeSet];
-    console.log(
-      "themes",
-      themes.map((t) => ({
-        name: tv(t, "d"),
-        pubkey: t.pubkey,
-      }))
-    );
-    if (!themes.length) throw new Error("Theme not found");
-    if (themes.length > 1) throw new Error("More than 1 theme");
-
-    themeId = tv(themes[0], "e");
-    console.log("theme id from name", themeId);
-  }
+  if (themeId.length !== 64) themeId = await getThemeByName(themeId, ndk);
 
   const theme = await ndk.fetchEvent(
     {
@@ -2711,7 +2745,7 @@ if (method.startsWith("publish_theme")) {
 } else if (method === "publish_site_event") {
   const pubkey = process.argv[3];
   const kinds = process.argv[4].split(",").map((k) => parseInt(k));
-  const hashtags = process.argv[5].split(",").filter((k) => k.trim() !== "");;
+  const hashtags = process.argv[5].split(",").filter((k) => k.trim() !== "");
   const themeId = process.argv[6];
   const domain = process.argv?.[7] || "";
   publishSiteEvent(pubkey, kinds, hashtags, themeId, domain).then(() =>
@@ -2738,7 +2772,9 @@ if (method.startsWith("publish_theme")) {
 } else if (method === "test_prepare_site") {
   const pubkey = process.argv[3];
   const kinds = (process.argv[4] || "").split(",").map((k) => parseInt(k));
-  const hashtags = (process.argv[5] || "").split(",").filter((k) => k.trim() !== "");;
+  const hashtags = (process.argv[5] || "")
+    .split(",")
+    .filter((k) => k.trim() !== "");
   testPrepareSite(pubkey, kinds, hashtags);
 } else if (method === "test_rgb") {
   const str = process.argv[3];
@@ -2753,4 +2789,7 @@ if (method.startsWith("publish_theme")) {
   console.log("data", data);
 } else if (method === "get_session_token") {
   getSessionToken();
+} else if (method === "theme_by_name") {
+  const name = process.argv[3];
+  getThemeByName(name);
 }
