@@ -1949,6 +1949,8 @@ async function apiAuth(req, res) {
     cookie.serialize("token", token, {
       httpOnly: true,
       maxAge: SESSION_TTL,
+      sameSite: "none",
+      secure: true
     })
   );
 
