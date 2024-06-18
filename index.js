@@ -1637,9 +1637,13 @@ async function putDomainInfo(info, status, expires, s3) {
   return data;
 }
 
+function getReqUrl(req) {
+  return "https://" + req.headers["host"] + req.url;
+}
+
 async function sendReply(res, reply, status) {
   res.setHeader("Content-Type", "application/json");
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Origin", res.req.headers["origin"] || "*");
   res.setHeader("Access-Control-Allow-Methods", "*");
   res.setHeader("Access-Control-Allow-Headers", "Authorization");
   res.writeHead(status || 200);
@@ -1956,7 +1960,7 @@ async function api(host, port) {
   const prisma = new PrismaClient();
 
   const requestListener = async function (req, res) {
-    console.log("request", req.url, req.headers);
+    console.log("request", req.method, req.url, req.headers);
     try {
       if (req.method === "OPTIONS") {
         // preflight
