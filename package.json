@@ -20,7 +20,6 @@
     "blossom-client-sdk": "^0.7.0",
     "browser-hbs": "file:../browser-hbs",
     "buffer": "^6.0.3",
-    "cookie": "^0.6.0",
     "dotenv": "^16.4.5",
     "fs": "^0.0.1-security",
     "libnostrsite": "file:../libnostrsite",

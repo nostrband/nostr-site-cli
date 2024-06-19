@@ -24,7 +24,6 @@ import postcssNestedImport from "postcss-nested-import";
 import path from "path";
 import slugifyExt from "slugify";
 import http from "http";
-import cookie from "cookie";
 import { PrismaClient } from "@prisma/client";
 
 import {
@@ -99,11 +98,11 @@ const NPUB_PRO_API = "https://api.npubpro.com";
 const NPUB_PRO_DOMAIN = "npub.pro";
 
 const DEFAULT_BLOSSOM_SERVERS = [
-  // FIXME doesn't return proper mime type
+  // doesn't return proper mime type
   // "https://cdn.satellite.earth/",
+  "https://files.v0l.io/",
   "https://blossom.nostr.hu/",
   "https://cdn.hzrd149.com/",
-  "https://files.v0l.io/",
   "https://media-server.slidestr.net/",
 ];
 
@@ -445,6 +444,7 @@ async function publishTheme(dir, latest, reupload) {
     if (file === "package-lock.json") return;
     if (file.startsWith(".")) return;
     if (file.startsWith("node_modules")) return;
+    if (file.startsWith("docs") && file.endsWith(".md")) return;
 
     // sass should be built into css
     if (file.endsWith(".scss")) return;
@@ -573,7 +573,7 @@ async function publishTheme(dir, latest, reupload) {
     pkg.push({
       entry,
       hash,
-      url: tv(file_event, "url"),
+      url: blossomUrls[0],
       //      relay: file_event.relay?.url || "wss://relay.nostr.band",
     });
 
@@ -1368,11 +1368,9 @@ async function getSessionToken() {
         pow,
       });
       if (r.status === 200) {
-        console.log("r", r.headers.getSetCookie());
-        if (!r.headers.getSetCookie()) break;
-        const cs = cookie.parse(r.headers.getSetCookie()[0]);
-        console.log("result", cs);
-        token = cs.token;
+        const data = await r.json();        
+        console.log("r", data);
+        token = data.token;
         break;
       } else if (r.status === 403) {
         const rep = await r.json();
@@ -1397,7 +1395,7 @@ async function fetchWithSession(url) {
   const token = fs.readFileSync(file);
   return fetch(url, {
     headers: {
-      cookie: `token=${token}`,
+      'X-NpubPro-Token': token,
     },
   })
     .then((r) => {
@@ -1656,9 +1654,9 @@ async function sendError(res, msg, status) {
 }
 
 function parseSession(req) {
-  const cookies = cookie.parse(req.headers["cookie"] || "");
-  const data = parseSessionToken(cookies.token);
-  console.log("token", cookies.token, "data", data);
+  const token = req.headers["x-npubpro-token"] || '';
+  const data = parseSessionToken(token);
+  console.log("token", token, "data", data);
   if (!data) return undefined;
   if (Date.now() / 1000 - data.timestamp > SESSION_TTL) return undefined;
   return data.pubkey;
@@ -1943,18 +1941,7 @@ async function apiAuth(req, res) {
   // update minPow for this ip
   ipPows.set(ip, { pow: minPow, tm: Date.now() });
 
-  // set token
-  res.setHeader(
-    "Set-Cookie",
-    cookie.serialize("token", token, {
-      httpOnly: true,
-      maxAge: SESSION_TTL,
-      sameSite: "none",
-      secure: true
-    })
-  );
-
-  sendReply(res, { ok: true });
+  sendReply(res, { token });
 }
 
 async function api(host, port) {
