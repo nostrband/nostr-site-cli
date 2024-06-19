@@ -1643,7 +1643,7 @@ async function sendReply(res, reply, status) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", res.req.headers["origin"] || "*");
   res.setHeader("Access-Control-Allow-Methods", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, X-NpubPro-Token");
   res.setHeader("Access-Control-Allow-Credentials", "true");  
   res.writeHead(status || 200);
   res.end(JSON.stringify(reply));
