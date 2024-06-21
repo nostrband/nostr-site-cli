@@ -1699,6 +1699,7 @@ async function reserve(
         info.pubkey
       );
 
+      info = undefined;
       if (!noRetry) {
         // try 3 times to append XX number
         for (let i = 0; i < 3; i++) {
@@ -1708,8 +1709,8 @@ async function reserve(
           info = await fetchDomainInfo(domain, s3);
           if (!info) break;
         }
-        if (info) throw new Error("Failed to assign domain");
       }
+      if (info) throw new Error("Failed to assign domain");
     }
   }
 
