@@ -25,6 +25,7 @@ import path from "path";
 import slugifyExt from "slugify";
 import http from "http";
 import { PrismaClient } from "@prisma/client";
+import { networkInterfaces } from "os";
 
 import {
   S3Client,
@@ -73,6 +74,7 @@ import {
 } from "nostr-tools";
 import readline from "node:readline";
 import { minePow } from "./pow.js";
+import { getProfileSlug } from "libnostrsite";
 
 const AWSRegion = "eu-north-1";
 
@@ -669,22 +671,6 @@ async function testBundle(dir) {
   }
 }
 
-// function tags(event, name, len = 2) {
-//   return event.tags.filter((t) => t.length >= len && t[0] === name);
-// }
-
-// function tag(event, name) {
-//   return tags(event, name)?.[0];
-// }
-
-// function tvs(event, name) {
-//   return tag(event, name)?.slice(1) || null;
-// }
-
-// function tv(event, name) {
-//   return tvs(event, name)?.[0] || null;
-// }
-
 async function createWebsite(dist, naddr, dir) {
   const { type, data: addr } = nip19.decode(naddr);
   if (type !== "naddr" || addr.kind !== KIND_SITE) throw new Error("Bad addr");
@@ -735,7 +721,7 @@ async function createWebsite(dist, naddr, dir) {
   manifest.start_url = new URL(tv(siteEvent, "r")).pathname;
   manifest.scope = manifest.start_url;
   manifest.name = tv(siteEvent, "title");
-  manifest.short_name = tv(siteEvent, "d");
+  manifest.short_name = tv(siteEvent, "name") || tv(siteEvent, "d");
   manifest.description = tv(siteEvent, "summary");
   for (const icon of manifest.icons) {
     icon.src = tv(siteEvent, "icon");
@@ -1368,7 +1354,7 @@ async function getSessionToken() {
         pow,
       });
       if (r.status === 200) {
-        const data = await r.json();        
+        const data = await r.json();
         console.log("r", data);
         token = data.token;
         break;
@@ -1395,7 +1381,7 @@ async function fetchWithSession(url) {
   const token = fs.readFileSync(file);
   return fetch(url, {
     headers: {
-      'X-NpubPro-Token': token,
+      "X-NpubPro-Token": token,
     },
   })
     .then((r) => {
@@ -1452,7 +1438,7 @@ async function testDeploy(pubkey, kinds, hashtags, themePackageId) {
     kind: KIND_SITE,
     content: "",
     tags: [
-      ["d", requestedDomain],
+      ["d", "" + Date.now()],
       ["name", name || "Nostr site"],
       ["title", meta.display_name || meta.name || "Nostr site"],
       ["summary", meta.about || ""],
@@ -1641,10 +1627,16 @@ function getReqUrl(req) {
 
 async function sendReply(res, reply, status) {
   res.setHeader("Content-Type", "application/json");
-  res.setHeader("Access-Control-Allow-Origin", res.req.headers["origin"] || "*");
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    res.req.headers["origin"] || "*"
+  );
   res.setHeader("Access-Control-Allow-Methods", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Authorization, X-NpubPro-Token");
-  res.setHeader("Access-Control-Allow-Credentials", "true");  
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization, X-NpubPro-Token"
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
   res.writeHead(status || 200);
   res.end(JSON.stringify(reply));
 }
@@ -1654,7 +1646,7 @@ async function sendError(res, msg, status) {
 }
 
 function parseSession(req) {
-  const token = req.headers["x-npubpro-token"] || '';
+  const token = req.headers["x-npubpro-token"] || "";
   const data = parseSessionToken(token);
   console.log("token", token, "data", data);
   if (!data) return undefined;
@@ -1662,21 +1654,17 @@ function parseSession(req) {
   return data.pubkey;
 }
 
-async function apiReserve(req, res, s3, prisma) {
-  const admin = parseSession(req);
-  if (!admin) return sendError(res, "Auth please", 401);
-
-  const url = new URL(req.url, "http://localhost");
-
-  let domain = url.searchParams.get("domain");
-  const site = url.searchParams.get("site");
-  if (!domain || !site) return sendError(res, "Specify domain and site", 400);
-
-  if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
-    return sendError(res, "Bad domain '" + domain + "'", 400);
-
-  const addr = parseNaddr(site);
-  if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
+async function reserve(
+  site,
+  admin,
+  domain,
+  expires,
+  s3,
+  prisma,
+  noRetry = false
+) {
+  const addr = site ? parseNaddr(site) : undefined;
+  if (site && !addr) return sendError(res, "Bad site '" + site + "'", 400);
 
   let info = await fetchDomainInfo(domain, s3);
   console.log("existing info", info);
@@ -1687,6 +1675,7 @@ async function apiReserve(req, res, s3, prisma) {
       info.domain === domain &&
       info.pubkey === admin &&
       infoAddr &&
+      addr &&
       infoAddr.pubkey === addr.pubkey &&
       infoAddr.kind === addr.kind &&
       infoAddr.identifier === addr.identifier
@@ -1706,36 +1695,119 @@ async function apiReserve(req, res, s3, prisma) {
       console.log(
         "Failed to reserve, already assigned",
         domain,
-        "site",
-        info.site
+        "pubkey",
+        info.pubkey
       );
 
-      // try 3 times to append XX number
-      for (let i = 0; i < 3; i++) {
-        const n = Math.floor(Math.random() * 100);
-        domain = `${domain}${n}`;
-        console.log("trying new domain", domain);
-        info = await fetchDomainInfo(domain, s3);
-        if (!info) break;
+      if (!noRetry) {
+        // try 3 times to append XX number
+        for (let i = 0; i < 3; i++) {
+          const n = Math.floor(Math.random() * 100);
+          domain = `${domain}${n}`;
+          console.log("trying new domain", domain);
+          info = await fetchDomainInfo(domain, s3);
+          if (!info) break;
+        }
+        if (info) throw new Error("Failed to assign domain");
       }
-      if (info) throw new Error("Failed to assign domain");
     }
   }
 
   if (!info) {
-    const expires = Date.now() + 3600000; // 1 hour
     const data = await putDomainInfo(
       { domain, site, pubkey: admin },
       "reserved",
       expires,
       s3
     );
-    console.log("reserved", domain, site, data);
+    console.log("reserved", domain, admin, site, data);
     info = data;
   }
 
   // ensure local copy of this domain
   await upsertDomainInfo(prisma, info);
+
+  // the one we assigned
+  return domain;
+}
+
+async function apiReserve(req, res, s3, prisma) {
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+
+  let domain = url.searchParams.get("domain");
+  const site = url.searchParams.get("site");
+  if (!domain || !site) return sendError(res, "Specify domain and site", 400);
+
+  if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
+    return sendError(res, "Bad domain '" + domain + "'", 400);
+
+  const expires = Date.now() + 3600000; // 1 hour
+  domain = await reserve(site, admin, domain, expires, s3, prisma);
+
+  // const addr = parseNaddr(site);
+  // if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
+
+  // let info = await fetchDomainInfo(domain, s3);
+  // console.log("existing info", info);
+
+  // if (info) {
+  //   const infoAddr = parseNaddr(info.site);
+  //   if (
+  //     info.domain === domain &&
+  //     info.pubkey === admin &&
+  //     infoAddr &&
+  //     infoAddr.pubkey === addr.pubkey &&
+  //     infoAddr.kind === addr.kind &&
+  //     infoAddr.identifier === addr.identifier
+  //   ) {
+  //     // all ok, already assigned
+  //     console.log("Already assigned", domain, site);
+  //   } else if (
+  //     info.domain === domain &&
+  //     info.pubkey === admin &&
+  //     info.status === "reserved" &&
+  //     !infoAddr
+  //   ) {
+  //     // all ok, we reserved this domain for this pubkey
+  //     console.log("Already reserved to pubkey", domain, info.pubkey);
+  //   } else {
+  //     // choose another domain for this site
+  //     console.log(
+  //       "Failed to reserve, already assigned",
+  //       domain,
+  //       "site",
+  //       info.site
+  //     );
+
+  //     // try 3 times to append XX number
+  //     for (let i = 0; i < 3; i++) {
+  //       const n = Math.floor(Math.random() * 100);
+  //       domain = `${domain}${n}`;
+  //       console.log("trying new domain", domain);
+  //       info = await fetchDomainInfo(domain, s3);
+  //       if (!info) break;
+  //     }
+  //     if (info) throw new Error("Failed to assign domain");
+  //   }
+  // }
+
+  // if (!info) {
+  //   const expires = Date.now() + 3600000; // 1 hour
+  //   const data = await putDomainInfo(
+  //     { domain, site, pubkey: admin },
+  //     "reserved",
+  //     expires,
+  //     s3
+  //   );
+  //   console.log("reserved", domain, site, data);
+  //   info = data;
+  // }
+
+  // // ensure local copy of this domain
+  // await upsertDomainInfo(prisma, info);
 
   sendReply(res, {
     domain: `${domain}.npub.pro`,
@@ -2401,7 +2473,7 @@ async function ssrRender() {
       const render = async (paths) => {
         const addr = parseAddr(d.site);
         const naddr = nip19.naddrEncode({
-          identifier: addr.name,
+          identifier: addr.identifier,
           pubkey: addr.pubkey,
           kind: KIND_SITE,
           relays: [SITE_RELAY],
@@ -2596,7 +2668,7 @@ async function publishSiteEvent(pubkey, kinds, hashtags, themeId, domain) {
   const parser = new NostrParser(`https://${identifier}.${NPUB_PRO_DOMAIN}/`);
   const settings = await parser.parseSite(
     {
-      name: identifier,
+      identifier,
       pubkey: adminPubkey,
       relays: [],
     },
@@ -2702,6 +2774,26 @@ function parseSessionToken(token) {
   return undefined;
 }
 
+async function reservePubkeyDomain(pubkey) {
+  const s3 = new S3Client({ region: AWSRegion });
+  const prisma = new PrismaClient();
+
+  const ndk = new NDK({
+    explicitRelayUrls: OUTBOX_RELAYS,
+  });
+  const profile = await fetchProfile(ndk, pubkey);
+  if (!profile) throw new Error("No profile for " + pubkey);
+
+  const slug = getProfileSlug(profile);
+  if (!slug) throw new Error("No profile slug");
+
+  console.log("reserving", slug, "for", pubkey);
+
+  const expires = Date.now() + 3 * 30 * 24 * 60 * 60; // 3 months
+  const domain = reserve(undefined, pubkey, slug, expires, s3, prisma, true);
+  console.log("reserved", domain, "for", pubkey);
+}
+
 // main
 console.log(process.argv);
 const method = process.argv[2];
@@ -2786,4 +2878,7 @@ if (method.startsWith("publish_theme")) {
 } else if (method === "theme_by_name") {
   const name = process.argv[3];
   getThemeByName(name);
+} else if (method === "reserve_pubkey_domain") {
+  const pubkey = process.argv[3];
+  reservePubkeyDomain(pubkey).then(() => process.exit());
 }
