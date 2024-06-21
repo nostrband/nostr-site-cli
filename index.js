@@ -2774,23 +2774,26 @@ function parseSessionToken(token) {
   return undefined;
 }
 
-async function reservePubkeyDomain(pubkey) {
+async function reservePubkeyDomain(pubkey, domain, months = 3) {
   const s3 = new S3Client({ region: AWSRegion });
   const prisma = new PrismaClient();
 
-  const ndk = new NDK({
-    explicitRelayUrls: OUTBOX_RELAYS,
-  });
-  const profile = await fetchProfile(ndk, pubkey);
-  if (!profile) throw new Error("No profile for " + pubkey);
+  if (!domain) {
+    const ndk = new NDK({
+      explicitRelayUrls: OUTBOX_RELAYS,
+    });
+    const profile = await fetchProfile(ndk, pubkey);
+    if (!profile) throw new Error("No profile for " + pubkey);
+  
+    const slug = getProfileSlug(profile);
+    if (!slug) throw new Error("No profile slug");
+  
+    domain = slug;
+  }
+  console.log("reserving", domain, "for", pubkey, "months", months);
 
-  const slug = getProfileSlug(profile);
-  if (!slug) throw new Error("No profile slug");
-
-  console.log("reserving", slug, "for", pubkey);
-
-  const expires = Date.now() + 3 * 30 * 24 * 60 * 60; // 3 months
-  const domain = reserve(undefined, pubkey, slug, expires, s3, prisma, true);
+  const expires = Date.now() + months * 30 * 24 * 60 * 60; 
+  domain = reserve(undefined, pubkey, domain, expires, s3, prisma, true);
   console.log("reserved", domain, "for", pubkey);
 }
 
@@ -2880,5 +2883,7 @@ if (method.startsWith("publish_theme")) {
   getThemeByName(name);
 } else if (method === "reserve_pubkey_domain") {
   const pubkey = process.argv[3];
-  reservePubkeyDomain(pubkey).then(() => process.exit());
+  const domain = process.argv?.[4] || '';
+  const months = process.argv?.[5] || 3;
+  reservePubkeyDomain(pubkey, domain, months).then(() => process.exit());
 }
