@@ -1699,7 +1699,6 @@ async function reserve(
         info.pubkey
       );
 
-      info = undefined;
       if (!noRetry) {
         // try 3 times to append XX number
         for (let i = 0; i < 3; i++) {
