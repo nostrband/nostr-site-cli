@@ -2785,109 +2785,122 @@ async function reservePubkeyDomain(pubkey, domain, months = 3) {
       });
       const profile = await fetchProfile(ndk, pubkey);
       if (!profile) throw new Error("No profile for " + pubkey);
-    
+
       const slug = getProfileSlug(profile);
       if (!slug) throw new Error("No profile slug");
-    
+
       domain = slug;
     }
     console.log("reserving", domain, "for", pubkey, "months", months);
-  
-    const expires = Date.now() + months * 30 * 24 * 60 * 60; 
-    domain = await reserve(undefined, pubkey, domain, expires, s3, prisma, true);
-    console.log("reserved", domain, "for", pubkey);  
+
+    const expires = Date.now() + months * 30 * 24 * 60 * 60;
+    domain = await reserve(
+      undefined,
+      pubkey,
+      domain,
+      expires,
+      s3,
+      prisma,
+      true
+    );
+    console.log("reserved", domain, "for", pubkey);
   } catch (e) {
     console.error(e);
   }
 }
 
 // main
-console.log(process.argv);
-const method = process.argv[2];
-if (method.startsWith("publish_theme")) {
-  const dir = process.argv[3];
-  const latest = method.includes("latest");
-  const reupload = method.includes("reupload");
-  publishTheme(dir, latest, reupload).then(() => process.exit());
-} else if (method === "create_website") {
-  const dist = process.argv[3];
-  const naddr = process.argv[4];
-  const dir = process.argv[5];
-  createWebsite(dist, naddr, dir).then(() => process.exit());
-} else if (method === "upload_website") {
-  const dir = process.argv[3];
-  const domain = process.argv[4];
-  uploadWebsite(dir, domain).then(() => process.exit());
-} else if (method === "render_website") {
-  const dir = process.argv[3];
-  const naddr = process.argv[4];
-  renderWebsite(dir, naddr, []).then(() => process.exit());
-} else if (method === "release_website") {
-  const naddr = process.argv[3];
-  releaseWebsite(naddr).then(() => process.exit());
-} else if (method === "test_upload_aws") {
-  uploadAWS().then(process.exit());
-} else if (method === "api") {
-  const host = process.argv[3];
-  const port = parseInt(process.argv[4]);
-  api(host, port);
-} else if (method === "ssr_watch") {
-  ssrWatch();
-} else if (method === "ssr_render") {
-  ssrRender();
-} else if (method === "publish_site_event") {
-  const pubkey = process.argv[3];
-  const kinds = process.argv[4].split(",").map((k) => parseInt(k));
-  const hashtags = process.argv[5].split(",").filter((k) => k.trim() !== "");
-  const themeId = process.argv[6];
-  const domain = process.argv?.[7] || "";
-  publishSiteEvent(pubkey, kinds, hashtags, themeId, domain).then(() =>
-    process.exit()
-  );
-} else if (method === "deploy_site") {
-  const domain = process.argv[3];
-  const naddr = process.argv[4];
-  deploySite(domain, naddr).then(() => process.exit());
-} else if (method === "test_aws") {
-  testAWS();
-} else if (method === "test_bundle") {
-  // first scan assets folder, find all filenames
-  const dir = process.argv[3];
-  testBundle(dir);
-} else if (method === "test_render") {
-  testRender();
-} else if (method === "test_deploy") {
-  const pubkey = process.argv[3];
-  const kinds = process.argv[4].split(",").filter((k) => k.trim() !== "");
-  const hashtags = process.argv[5].split(",").filter((k) => k.trim() !== "");
-  const theme = process.argv[6];
-  testDeploy(pubkey, kinds, hashtags, theme);
-} else if (method === "test_prepare_site") {
-  const pubkey = process.argv[3];
-  const kinds = (process.argv[4] || "").split(",").map((k) => parseInt(k));
-  const hashtags = (process.argv[5] || "")
-    .split(",")
-    .filter((k) => k.trim() !== "");
-  testPrepareSite(pubkey, kinds, hashtags);
-} else if (method === "test_rgb") {
-  const str = process.argv[3];
-  testRGB(str);
-} else if (method === "generate_key") {
-  console.log(bytesToHex(randomBytes(32)));
-} else if (method === "test_session_token") {
-  const pubkey = process.argv[3];
-  const token = createSessionToken(pubkey);
-  console.log("token: ", token);
-  const data = parseSessionToken(token);
-  console.log("data", data);
-} else if (method === "get_session_token") {
-  getSessionToken();
-} else if (method === "theme_by_name") {
-  const name = process.argv[3];
-  getThemeByName(name);
-} else if (method === "reserve_pubkey_domain") {
-  const pubkey = process.argv[3];
-  const domain = process.argv?.[4] || '';
-  const months = process.argv?.[5] || 3;
-  reservePubkeyDomain(pubkey, domain, months).then(() => process.exit());
+try {
+  console.log(process.argv);
+  const method = process.argv[2];
+  if (method.startsWith("publish_theme")) {
+    const dir = process.argv[3];
+    const latest = method.includes("latest");
+    const reupload = method.includes("reupload");
+    publishTheme(dir, latest, reupload).then(() => process.exit());
+  } else if (method === "create_website") {
+    const dist = process.argv[3];
+    const naddr = process.argv[4];
+    const dir = process.argv[5];
+    createWebsite(dist, naddr, dir).then(() => process.exit());
+  } else if (method === "upload_website") {
+    const dir = process.argv[3];
+    const domain = process.argv[4];
+    uploadWebsite(dir, domain).then(() => process.exit());
+  } else if (method === "render_website") {
+    const dir = process.argv[3];
+    const naddr = process.argv[4];
+    renderWebsite(dir, naddr, []).then(() => process.exit());
+  } else if (method === "release_website") {
+    const naddr = process.argv[3];
+    releaseWebsite(naddr).then(() => process.exit());
+  } else if (method === "test_upload_aws") {
+    uploadAWS().then(process.exit());
+  } else if (method === "api") {
+    const host = process.argv[3];
+    const port = parseInt(process.argv[4]);
+    api(host, port);
+  } else if (method === "ssr_watch") {
+    ssrWatch();
+  } else if (method === "ssr_render") {
+    ssrRender();
+  } else if (method === "publish_site_event") {
+    const pubkey = process.argv[3];
+    const kinds = process.argv[4].split(",").map((k) => parseInt(k));
+    const hashtags = process.argv[5].split(",").filter((k) => k.trim() !== "");
+    const themeId = process.argv[6];
+    const domain = process.argv?.[7] || "";
+    publishSiteEvent(pubkey, kinds, hashtags, themeId, domain).then(() =>
+      process.exit()
+    );
+  } else if (method === "deploy_site") {
+    const domain = process.argv[3];
+    const naddr = process.argv[4];
+    deploySite(domain, naddr).then(() => process.exit());
+  } else if (method === "test_aws") {
+    testAWS();
+  } else if (method === "test_bundle") {
+    // first scan assets folder, find all filenames
+    const dir = process.argv[3];
+    testBundle(dir);
+  } else if (method === "test_render") {
+    testRender();
+  } else if (method === "test_deploy") {
+    const pubkey = process.argv[3];
+    const kinds = process.argv[4].split(",").filter((k) => k.trim() !== "");
+    const hashtags = process.argv[5].split(",").filter((k) => k.trim() !== "");
+    const theme = process.argv[6];
+    testDeploy(pubkey, kinds, hashtags, theme);
+  } else if (method === "test_prepare_site") {
+    const pubkey = process.argv[3];
+    const kinds = (process.argv[4] || "").split(",").map((k) => parseInt(k));
+    const hashtags = (process.argv[5] || "")
+      .split(",")
+      .filter((k) => k.trim() !== "");
+    testPrepareSite(pubkey, kinds, hashtags);
+  } else if (method === "test_rgb") {
+    const str = process.argv[3];
+    testRGB(str);
+  } else if (method === "generate_key") {
+    console.log(bytesToHex(randomBytes(32)));
+  } else if (method === "test_session_token") {
+    const pubkey = process.argv[3];
+    const token = createSessionToken(pubkey);
+    console.log("token: ", token);
+    const data = parseSessionToken(token);
+    console.log("data", data);
+  } else if (method === "get_session_token") {
+    getSessionToken();
+  } else if (method === "theme_by_name") {
+    const name = process.argv[3];
+    getThemeByName(name);
+  } else if (method === "reserve_pubkey_domain") {
+    const pubkey = process.argv[3];
+    const domain = process.argv?.[4] || "";
+    const months = process.argv?.[5] || 3;
+    console.log(pubkey, domain, months);
+    reservePubkeyDomain(pubkey, domain, months).then(() => process.exit());
+  }
+} catch (e) {
+  console.error(e);
 }
