@@ -2778,35 +2778,26 @@ async function reservePubkeyDomain(pubkey, domain, months = 3) {
   const s3 = new S3Client({ region: AWSRegion });
   const prisma = new PrismaClient();
 
-  try {
-    if (!domain) {
-      const ndk = new NDK({
-        explicitRelayUrls: OUTBOX_RELAYS,
-      });
-      const profile = await fetchProfile(ndk, pubkey);
-      if (!profile) throw new Error("No profile for " + pubkey);
+  if (!domain) {
+    console.log("choosing domain");
+    const ndk = new NDK({
+      explicitRelayUrls: OUTBOX_RELAYS,
+    });
+    ndk.connect();
+    const profile = await fetchProfile(ndk, pubkey);
+    if (!profile) throw new Error("No profile for " + pubkey);
 
-      const slug = getProfileSlug(profile);
-      if (!slug) throw new Error("No profile slug");
+    const slug = getProfileSlug(profile);
+    console.log("slug", slug);
+    if (!slug) throw new Error("No profile slug");
 
-      domain = slug;
-    }
-    console.log("reserving", domain, "for", pubkey, "months", months);
-
-    const expires = Date.now() + months * 30 * 24 * 60 * 60;
-    domain = await reserve(
-      undefined,
-      pubkey,
-      domain,
-      expires,
-      s3,
-      prisma,
-      true
-    );
-    console.log("reserved", domain, "for", pubkey);
-  } catch (e) {
-    console.error(e);
+    domain = slug;
   }
+  console.log("reserving", domain, "for", pubkey, "months", months);
+
+  const expires = Date.now() + months * 30 * 24 * 60 * 60;
+  domain = await reserve(undefined, pubkey, domain, expires, s3, prisma, true);
+  console.log("reserved", domain, "for", pubkey);
 }
 
 // main
