@@ -2793,7 +2793,7 @@ async function reservePubkeyDomain(pubkey, domain, months = 3) {
   console.log("reserving", domain, "for", pubkey, "months", months);
 
   const expires = Date.now() + months * 30 * 24 * 60 * 60; 
-  domain = reserve(undefined, pubkey, domain, expires, s3, prisma, true);
+  domain = await reserve(undefined, pubkey, domain, expires, s3, prisma, true);
   console.log("reserved", domain, "for", pubkey);
 }
 
