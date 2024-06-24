@@ -1188,9 +1188,10 @@ async function zipSiteDir(dir, file) {
     });
 
     archive.pipe(output);
-    // archive.directory(dir, false);
+    // both index.html and 404 must be same files 
+    // that only bootstrap the renderer
     archive.file(dir + '/__404.html', { name: '404.html' });
-    archive.file(dir + '/index.html', { name: "index.html" });
+    archive.file(dir + '/__404.html', { name: "index.html" });
     archive.file(dir + '/manifest.webmanifest', { name: "manifest.webmanifest" });
     archive.file(dir + '/sw.js', { name: "sw.js" });
     archive.finalize();
@@ -2910,7 +2911,7 @@ try {
   } else if (method === "render_website") {
     const dir = process.argv[3];
     const naddr = process.argv[4];
-    renderWebsite(dir, naddr, []).then(() => process.exit());
+    renderWebsite(dir, naddr).then(() => process.exit());
   } else if (method === "release_website") {
     const naddr = process.argv[3];
     const paths = [];
