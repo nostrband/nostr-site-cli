@@ -2496,7 +2496,7 @@ async function ssrRender() {
         await spawn("release_website", [
           naddr,
           ...paths,
-        ]).then(() => process.exit());
+        ]);
     
 //        await releaseWebsite(naddr, paths);
       };
