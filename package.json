@@ -17,6 +17,7 @@
     "@nostr-dev-kit/ndk": "^2.7.1",
     "@prisma/client": "^5.15.0",
     "@web-std/file": "^3.0.3",
+    "archiver": "^7.0.1",
     "blossom-client-sdk": "^0.7.0",
     "browser-hbs": "file:../browser-hbs",
     "buffer": "^6.0.3",

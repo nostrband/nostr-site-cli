@@ -26,6 +26,7 @@ import slugifyExt from "slugify";
 import http from "http";
 import { PrismaClient } from "@prisma/client";
 import childProcess from "child_process";
+import archiver from "archiver";
 
 import {
   S3Client,
@@ -1156,7 +1157,49 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
   }
 }
 
-async function releaseWebsite(naddr, paths, preview = false) {
+async function zipSiteDir(dir, file) {
+
+  console.log("zipping", dir);
+  const tmp = "~zip" + Math.random();
+  const output = fs.createWriteStream(tmp);
+  const archive = archiver("zip");
+  await new Promise((ok, err) => {
+    output.on("close", function () {
+      console.log(archive.pointer() + " total bytes");
+      console.log(
+        "archiver has been finalized and the output file descriptor has closed."
+      );
+      ok();
+    });
+
+    // good practice to catch warnings (ie stat failures and other non-blocking errors)
+    archive.on("warning", function (e) {
+      console.warn("warning", e);
+      // if (err.code === "ENOENT") {
+      //   // log warning
+      // } else {
+      //   // throw error
+      //   throw err;
+      // }
+    });
+
+    archive.on("error", function (e) {
+      err(e);
+    });
+
+    archive.pipe(output);
+    // archive.directory(dir, false);
+    archive.file(dir + '/__404.html', { name: '404.html' });
+    archive.file(dir + '/index.html', { name: "index.html" });
+    archive.file(dir + '/manifest.webmanifest', { name: "manifest.webmanifest" });
+    archive.file(dir + '/sw.js', { name: "sw.js" });
+    archive.finalize();
+  });
+
+  fs.renameSync(tmp, file);
+}
+
+async function releaseWebsite(naddr, paths, { preview = false, zip = false } = {}) {
   const dir = "tmp_" + Date.now();
   fs.mkdirSync(dir);
   console.warn(Date.now(), "dir", dir);
@@ -1165,6 +1208,10 @@ async function releaseWebsite(naddr, paths, preview = false) {
   console.warn(Date.now(), "origin", site.origin);
   const url = new URL(site.origin.toLowerCase());
   if (!url.hostname.endsWith(".npub.pro")) throw new Error("Unknown subdomain");
+
+  if (zip) {
+    await zipSiteDir(dir, dir + "/dist.zip");
+  }
 
   const domain = url.hostname.split(".")[0];
   await uploadWebsite(dir, domain);
@@ -1848,7 +1895,7 @@ async function apiDeploy(req, res, s3, prisma) {
     return sendError(res, "Wrong site", 400);
 
   // pre-render one page and publish
-  await releaseWebsite(site, ["/"], true);
+  await releaseWebsite(site, ["/"], { preview: true, zip: true });
 
   // FIXME expires when?
   const expires = 0;
@@ -2493,12 +2540,9 @@ async function ssrRender() {
           relays: [SITE_RELAY],
         });
         console.log("rendering", d.domain, naddr, "paths", paths.length);
-        await spawn("release_website", [
-          naddr,
-          ...paths,
-        ]);
-    
-//        await releaseWebsite(naddr, paths);
+        await spawn("release_website", [naddr, ...paths]);
+
+        //        await releaseWebsite(naddr, paths);
       };
 
       // full rerender?
@@ -2640,7 +2684,14 @@ async function getThemeByName(name, ndk = null) {
   return themeId;
 }
 
-async function publishSiteEvent(pubkey, kinds, hashtags, themeId, domain, d_tag = '') {
+async function publishSiteEvent(
+  pubkey,
+  kinds,
+  hashtags,
+  themeId,
+  domain,
+  d_tag = ""
+) {
   await ensureAuth();
 
   const adminPubkey = (await signer.user()).pubkey;
@@ -2680,8 +2731,8 @@ async function publishSiteEvent(pubkey, kinds, hashtags, themeId, domain, d_tag 
 
   // d_tag
   const identifier = d_tag || tv(site, "d");
-  site.tags = site.tags.filter(t => t.length < 2 || t[0] !== 'd');
-  site.tags.push(['d', d_tag]);
+  site.tags = site.tags.filter((t) => t.length < 2 || t[0] !== "d");
+  site.tags.push(["d", d_tag]);
 
   // to figure out the hashtags and navigation we have to load the
   // site posts first, this is kinda ugly and slow but easier to reuse
@@ -2937,6 +2988,10 @@ try {
       "naddr1qqrksmmyd33x7eqpzamhxue69uhhyetvv9ujumnsw438qun09e3k7mgzyqyw4hjsmaga5jjz7hwqgh34kdceqtsx665q2g2mas7h9hrg0n9sgqcyqqq8wvqkuxchf",
       "/",
     ]).then(() => process.exit());
+  } else if (method === "zip_dir") {
+    const dir = process.argv[3];
+    const path = process.argv[4];
+    zipSiteDir(dir, path).then(() => process.exit());
   }
 } catch (e) {
   console.error(e);
