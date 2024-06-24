@@ -1911,6 +1911,44 @@ async function apiDeploy(req, res, s3, prisma) {
   });
 }
 
+async function apiCheck(req, res, s3) {
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+
+  const domain = url.searchParams.get("domain").split(".npub.pro")[0];
+  const site = url.searchParams.get("site");
+
+  if (!domain || !site) return sendError(res, "Specify domain and site", 400);
+
+  if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
+    return sendError(res, "Bad domain '" + domain + "'", 400);
+
+  const addr = parseNaddr(site);
+  if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
+
+  const info = await fetchDomainInfo(domain, s3);
+  if (info) {
+    const infoAddr = parseNaddr(info.site);
+    if (
+      info.domain !== domain ||
+      info.pubkey !== admin ||
+      !infoAddr ||
+      infoAddr.pubkey !== addr.pubkey ||
+      infoAddr.identifier !== addr.identifier ||
+      infoAddr.kind !== addr.kind
+    ) {
+      return sendError(res, "Not available", 400);
+    }
+  }
+
+  return sendReply(res, {
+    domain,
+    status: "available"
+  });
+}
+
 class AsyncMutex {
   queue = [];
   promise = undefined;
@@ -2081,6 +2119,8 @@ async function api(host, port) {
         await mutex.run(() => apiReserve(req, res, s3, prisma));
       } else if (req.url.startsWith("/deploy")) {
         await apiDeploy(req, res, s3, prisma);
+      } else if (req.url.startsWith("/check")) {
+        await apiCheck(req, res, s3);
       } else if (req.url.startsWith("/auth")) {
         await apiAuth(req, res);
       } else {
