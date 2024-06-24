@@ -25,7 +25,7 @@ import path from "path";
 import slugifyExt from "slugify";
 import http from "http";
 import { PrismaClient } from "@prisma/client";
-import { networkInterfaces } from "os";
+import childProcess from "child_process";
 
 import {
   S3Client,
@@ -123,6 +123,7 @@ const OUTBOX_RELAYS = [
 const BLACKLISTED_RELAYS = [
   // doesn't return EOSE, always have to wait for timeout
   "wss//nostr.mutinywallet.com/",
+  "wss://brb.io/",
 ];
 
 const SITE_RELAY = "wss://relay.npubpro.com";
@@ -2228,28 +2229,38 @@ class EventSync {
             };
           });
 
-          const r =
-            this.ndk.pool.relays.get(url) || new NDKRelay(url, authPolicy);
-          if (r.connectivity.status !== NDKRelayStatus.CONNECTED) {
-            console.log("connecting to", url);
+          let r = this.ndk.pool.relays.get(url);
+          if (!r) {
+            r = new NDKRelay(url, authPolicy);
             try {
-              await r.connect(1000, /* reconnect */ false);
-            } catch {}
-            console.log(
-              "finished connecting to",
-              url,
-              "status",
-              r.connectivity.status
-            );
-            if (r.connectivity.status !== NDKRelayStatus.CONNECTED) {
+              await r.connect(1000);
+              this.ndk.pool.addRelay(r);
+            } catch (e) {
               console.log("failed to connect to", url);
-              // FIXME ndk doesn't really disconnect, it keeps trying to reconnect,
-              // so this login makes no sense
-              // r.disconnect();
-              // this.ndk.pool.removeRelay(url);
-              ok();
-              return;
             }
+          }
+          if (r.connectivity.status !== NDKRelayStatus.CONNECTED) {
+            console.log("still not connected to", url);
+            ok();
+            // console.log("connecting to", url);
+            // try {
+            //   await r.connect(1000, /* reconnect */ false);
+            // } catch {}
+            // console.log(
+            //   "finished connecting to",
+            //   url,
+            //   "status",
+            //   r.connectivity.status
+            // );
+            // if (r.connectivity.status !== NDKRelayStatus.CONNECTED) {
+            //   console.log("failed to connect to", url);
+            //   // FIXME ndk doesn't really disconnect, it keeps trying to reconnect,
+            //   // so this login makes no sense
+            //   // r.disconnect();
+            //   // this.ndk.pool.removeRelay(url);
+            //   ok();
+            //   return;
+            // }
           }
 
           console.log("relay", url, "pubkeys", relay.pubkeys.length);
@@ -2326,6 +2337,9 @@ async function ssrWatch() {
   const events = new Map();
   const eventSync = new EventSync(ndk);
 
+  // buffer for relay delays
+  const SYNC_BUFFER_SEC = 60; // 1 minute
+
   let last_site_tm = 0;
   while (true) {
     // list of deployed sites, all the rest are ignored
@@ -2352,7 +2366,7 @@ async function ssrWatch() {
       // timeout
       [new Promise((ok) => setTimeout(ok, 5000))]
     );
-    last_site_tm = Math.floor(Date.now() / 1000);
+    last_site_tm = Math.floor(Date.now() / 1000) - SYNC_BUFFER_SEC;
 
     for (const s of newSites) {
       if (s.kind !== KIND_SITE) continue;
@@ -2388,7 +2402,7 @@ async function ssrWatch() {
     }
 
     // let event syncer do it's job
-    const fetchedTm = Math.floor(Date.now() / 1000);
+    const fetchedTm = Math.floor(Date.now() / 1000) - SYNC_BUFFER_SEC;
     const newEvents = await eventSync.process();
     for (const e of newEvents) {
       const id = eventId(e);
@@ -2479,7 +2493,12 @@ async function ssrRender() {
           relays: [SITE_RELAY],
         });
         console.log("rendering", d.domain, naddr, "paths", paths.length);
-        await releaseWebsite(naddr, paths);
+        await spawn("release_website", [
+          naddr,
+          ...paths,
+        ]).then(() => process.exit());
+    
+//        await releaseWebsite(naddr, paths);
       };
 
       // full rerender?
@@ -2790,6 +2809,7 @@ async function reservePubkeyDomain(pubkey, domain, months = 3) {
     const slug = getProfileSlug(profile);
     console.log("slug", slug);
     if (!slug) throw new Error("No profile slug");
+    if (slug.length === 1) throw new Error("Short slug");
 
     domain = slug;
   }
@@ -2798,6 +2818,22 @@ async function reservePubkeyDomain(pubkey, domain, months = 3) {
   const expires = Date.now() + months * 30 * 24 * 60 * 60;
   domain = await reserve(undefined, pubkey, domain, expires, s3, prisma, true);
   console.log("reserved", domain, "for", pubkey);
+}
+
+async function spawn(cmd, args) {
+  const child = childProcess.spawn("node", ["index.js", cmd, ...args]);
+  child.stdout.on("data", (data) => {
+    console.log(`stdout: ${data}`);
+  });
+  child.stderr.on("data", (data) => {
+    console.error(`stderr: ${data}`);
+  });
+  return new Promise((ok) => {
+    child.on("close", (code) => {
+      console.log(`child process exited with code ${code}`);
+      ok(code);
+    });
+  });
 }
 
 // main
@@ -2824,7 +2860,9 @@ try {
     renderWebsite(dir, naddr, []).then(() => process.exit());
   } else if (method === "release_website") {
     const naddr = process.argv[3];
-    releaseWebsite(naddr).then(() => process.exit());
+    const paths = [];
+    for (let i = 4; i < process.argv.length; i++) paths.push(process.argv[i]);
+    releaseWebsite(naddr, paths).then(() => process.exit());
   } else if (method === "test_upload_aws") {
     uploadAWS().then(process.exit());
   } else if (method === "api") {
@@ -2891,6 +2929,11 @@ try {
     const months = process.argv?.[5] || 3;
     console.log(pubkey, domain, months);
     reservePubkeyDomain(pubkey, domain, months).then(() => process.exit());
+  } else if (method === "test_spawn") {
+    spawn("release_website", [
+      "naddr1qqrksmmyd33x7eqpzamhxue69uhhyetvv9ujumnsw438qun09e3k7mgzyqyw4hjsmaga5jjz7hwqgh34kdceqtsx665q2g2mas7h9hrg0n9sgqcyqqq8wvqkuxchf",
+      "/",
+    ]).then(() => process.exit());
   }
 } catch (e) {
   console.error(e);

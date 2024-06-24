@@ -16,9 +16,9 @@ model Domain {
   pubkey    String?
   // last time it was rendered
   rendered  BigInt @default(0)
-  // last time it was updated, if < rendered => needs render
+  // last time it was updated, if < rendered => needs rerender
   updated   BigInt @default(0)
-  // when initial fetch was performed
+  // when last fetch was performed
   fetched   BigInt @default(0) 
 
   @@index([fetched])
