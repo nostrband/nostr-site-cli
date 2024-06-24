@@ -2640,7 +2640,7 @@ async function getThemeByName(name, ndk = null) {
   return themeId;
 }
 
-async function publishSiteEvent(pubkey, kinds, hashtags, themeId, domain) {
+async function publishSiteEvent(pubkey, kinds, hashtags, themeId, domain, d_tag = '') {
   await ensureAuth();
 
   const adminPubkey = (await signer.user()).pubkey;
@@ -2678,8 +2678,10 @@ async function publishSiteEvent(pubkey, kinds, hashtags, themeId, domain) {
     },
   });
 
-  // site name
-  const identifier = tv(site, "d");
+  // d_tag
+  const identifier = d_tag || tv(site, "d");
+  site.tags = site.tags.filter(t => t.length < 2 || t[0] !== 'd');
+  site.tags.push(['d', d_tag]);
 
   // to figure out the hashtags and navigation we have to load the
   // site posts first, this is kinda ugly and slow but easier to reuse
@@ -2879,7 +2881,8 @@ try {
     const hashtags = process.argv[5].split(",").filter((k) => k.trim() !== "");
     const themeId = process.argv[6];
     const domain = process.argv?.[7] || "";
-    publishSiteEvent(pubkey, kinds, hashtags, themeId, domain).then(() =>
+    const d_tag = process.argv?.[8] || "";
+    publishSiteEvent(pubkey, kinds, hashtags, themeId, domain, d_tag).then(() =>
       process.exit()
     );
   } else if (method === "deploy_site") {
