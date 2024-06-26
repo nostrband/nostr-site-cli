@@ -72,10 +72,15 @@ import {
   getEventHash,
   generatePrivateKey,
   verifySignature,
+  getPublicKey,
+  nip04,
+  validateEvent,
 } from "nostr-tools";
 import readline from "node:readline";
 import { minePow } from "./pow.js";
 import { getProfileSlug } from "libnostrsite";
+import { fetchNostrSite } from "libnostrsite";
+import { fetchInboxRelays } from "libnostrsite";
 
 const AWSRegion = "eu-north-1";
 
@@ -93,12 +98,17 @@ const KIND_LONG_NOTE = 30023;
 const LABEL_THEME = "theme";
 const LABEL_ONTOLOGY = "org.nostrsite.ontology";
 
+const DEFAULT_ZAP_SPLIT =
+  "787338757fc25d65cd929394d5e7713cf43638e8d259e8dcf5c73b834eb851f2";
+
 const ENGINE = "pro.npub.v1";
 
 const DOMAINS_BUCKET = "domains.npub.pro";
 
 const NPUB_PRO_API = "https://api.npubpro.com";
 const NPUB_PRO_DOMAIN = "npub.pro";
+
+const OTP_TTL = 300000; // 5 minutes
 
 const DEFAULT_BLOSSOM_SERVERS = [
   // doesn't return proper mime type
@@ -118,7 +128,7 @@ const DEFAULT_RELAYS = [
 const OUTBOX_RELAYS = [
   "wss://purplepag.es/",
   "wss://user.kindpag.es/",
-  "wss://relay.nos.social/",
+  // "wss://relay.nos.social/",
 ];
 
 const BLACKLISTED_RELAYS = [
@@ -364,6 +374,10 @@ async function publishPackageEvent({
     kind: KIND_PACKAGE,
     content: readme,
     tags: [
+      [
+        "alt",
+        `Nostr site theme package: ${packageJson?.name} v.${packageJson?.version}`,
+      ],
       ["title", packageJson?.name || ""],
       ["summary", packageJson?.description || ""],
       ["version", packageJson?.version || ""],
@@ -372,6 +386,7 @@ async function publishPackageEvent({
       ["l", LABEL_THEME, LABEL_ONTOLOGY],
       ["L", LABEL_ONTOLOGY],
       ["a", themeAddr, ndk.pool.relays.values().next().value.url],
+      ["zap", DEFAULT_ZAP_SPLIT],
     ],
   });
 
@@ -405,12 +420,14 @@ async function publishThemeEvent({
     content: readme,
     tags: [
       ["d", packageJson.name],
+      ["alt", `Nostr site theme: ${packageJson?.name}`],
       ["title", packageJson?.name || ""],
       ["summary", packageJson?.description || ""],
       ["version", packageJson?.version || ""],
       ["license", packageJson?.license || ""],
       ["e", packageEventId, ndk.pool.relays.values().next().value.url],
       ["z", ENGINE],
+      ["zap", DEFAULT_ZAP_SPLIT],
     ],
   });
 
@@ -435,7 +452,10 @@ async function prepareContentBuffer(path) {
 }
 
 // publish a theme
-async function publishTheme(dir, latest, reupload) {
+async function publishTheme(
+  dir,
+  { latest = false, reupload = false, includeFonts = false }
+) {
   await ensureAuth();
 
   console.log("publishing", dir);
@@ -444,10 +464,15 @@ async function publishTheme(dir, latest, reupload) {
   fs.readdirSync(dir, { recursive: true }).forEach((file) => {
     const stat = fs.statSync(dir + "/" + file);
     if (!stat.isFile()) return;
+    if (file.startsWith(".")) return;
     if (file.endsWith(".lock")) return;
+    if (file.endsWith(".zip")) return;
     if (file === "package-lock.json") return;
     if (file.startsWith(".")) return;
     if (file.startsWith("node_modules")) return;
+    // FIXME include later when we start supporting i18n
+    if (file.startsWith("locales")) return;
+    if (file.startsWith("src/")) return;
     if (file.startsWith("docs") && file.endsWith(".md")) return;
 
     // sass should be built into css
@@ -455,11 +480,13 @@ async function publishTheme(dir, latest, reupload) {
     if (file.endsWith(".sass")) return;
 
     // fonts should be inlined
-    if (file.endsWith(".woff")) return;
-    if (file.endsWith(".woff2")) return;
-    if (file.endsWith(".otf")) return;
-    if (file.endsWith(".eot")) return;
-    if (file.endsWith(".ttf")) return;
+    if (!includeFonts) {
+      if (file.endsWith(".woff")) return;
+      if (file.endsWith(".woff2")) return;
+      if (file.endsWith(".otf")) return;
+      if (file.endsWith(".eot")) return;
+      if (file.endsWith(".ttf")) return;
+    }
 
     // if (
     //   file.startsWith("assets/") &&
@@ -1158,7 +1185,6 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
 }
 
 async function zipSiteDir(dir, file) {
-
   console.log("zipping", dir);
   const tmp = "~zip" + Math.random();
   const output = fs.createWriteStream(tmp);
@@ -1188,19 +1214,25 @@ async function zipSiteDir(dir, file) {
     });
 
     archive.pipe(output);
-    // both index.html and 404 must be same files 
+    // both index.html and 404 must be same files
     // that only bootstrap the renderer
-    archive.file(dir + '/__404.html', { name: '404.html' });
-    archive.file(dir + '/__404.html', { name: "index.html" });
-    archive.file(dir + '/manifest.webmanifest', { name: "manifest.webmanifest" });
-    archive.file(dir + '/sw.js', { name: "sw.js" });
+    archive.file(dir + "/__404.html", { name: "404.html" });
+    archive.file(dir + "/__404.html", { name: "index.html" });
+    archive.file(dir + "/manifest.webmanifest", {
+      name: "manifest.webmanifest",
+    });
+    archive.file(dir + "/sw.js", { name: "sw.js" });
     archive.finalize();
   });
 
   fs.renameSync(tmp, file);
 }
 
-async function releaseWebsite(naddr, paths, { preview = false, zip = false } = {}) {
+async function releaseWebsite(
+  naddr,
+  paths,
+  { preview = false, zip = false } = {}
+) {
   const dir = "tmp_" + Date.now();
   fs.mkdirSync(dir);
   console.warn(Date.now(), "dir", dir);
@@ -1425,13 +1457,19 @@ async function getSessionToken() {
   }
 }
 
-async function fetchWithSession(url) {
+async function fetchWithSession(url, method = "GET", body = undefined) {
   const file = homedir + "/.nostr-site-cli-token.json";
   const token = fs.readFileSync(file);
+  const headers = {
+    "X-NpubPro-Token": token,
+  };
+  if (body) {
+    headers["Content-Type"] = "application/json";
+  }
   return fetch(url, {
-    headers: {
-      "X-NpubPro-Token": token,
-    },
+    method,
+    body: body ? JSON.stringify(body) : undefined,
+    headers,
   })
     .then((r) => {
       console.log("reply", r);
@@ -1945,28 +1983,30 @@ async function apiCheck(req, res, s3) {
 
   return sendReply(res, {
     domain,
-    status: "available"
+    status: "available",
   });
 }
 
 class AsyncMutex {
   queue = [];
-  promise = undefined;
+  running = false;
 
   async execute() {
     const { cb, ok, err } = this.queue.shift();
+    this.running = true;
     try {
       ok(await cb());
     } catch (e) {
       err(e);
     }
+    this.running = false;
     if (this.queue.length > 0) this.execute();
   }
 
   async run(cb) {
     return new Promise(async (ok, err) => {
       this.queue.push({ cb, ok, err });
-      if (this.queue.length === 1) this.execute();
+      if (!this.running && this.queue.length === 1) this.execute();
     });
   }
 }
@@ -2103,10 +2143,174 @@ async function apiAuth(req, res) {
   sendReply(res, { token });
 }
 
+function generateOTP() {
+  return randomBytes(6)
+    .map((b) => b % 10)
+    .map((b) => "" + b)
+    .join("");
+}
+
+function getServerKey() {
+  const nsec = process.env.SERVER_NSEC;
+  const { type, data } = nip19.decode(nsec);
+  if (type !== "nsec" || !data) throw new Error("No server key");
+  return data;
+}
+
+async function sendOTP(pubkey, code, relays, ndk) {
+  const key = getServerKey();
+  const signer = new NDKPrivateKeySigner(key);
+  const dm = new NDKEvent(ndk, {
+    kind: 4,
+    pubkey: getPublicKey(key),
+    content: await nip04.encrypt(key, pubkey, "Npub.pro code: " + code),
+    tags: [["p", pubkey]],
+  });
+  await dm.sign(signer);
+  const r = await dm.publish(NDKRelaySet.fromRelayUrls(relays, ndk));
+  console.log(
+    Date.now(),
+    "sent DM code",
+    code,
+    "for",
+    pubkey,
+    "to",
+    [...r].map((r) => r.url)
+  );
+}
+
+async function apiOTP(req, res, prisma, ndk) {
+  const url = new URL(req.url, "http://localhost");
+  const pubkey = url.searchParams.get("pubkey");
+
+  // we don't ask for pow in this method,
+  // but we use pow counter for per-ip throttling
+  const minPow = getMinPow(req);
+  if (minPow > MIN_POW + 10) return sendError(res, "Too many requests", 403);
+
+  const relays = await fetchInboxRelays(ndk, [pubkey]);
+  const code = generateOTP();
+
+  await prisma.codes.create({
+    data: {
+      npub: nip19.npubEncode(pubkey),
+      code,
+      timestamp: Date.now(),
+    },
+  });
+
+  await sendOTP(pubkey, code, relays, ndk);
+
+  const ip = getIp(req);
+  ipPows.set(ip, { pow: minPow, tm: Date.now() });
+
+  sendReply(res, {
+    pubkey,
+    ok: true,
+  });
+}
+
+async function apiAuthOTP(req, res, prisma) {
+  const url = new URL(req.url, "http://localhost");
+
+  const pubkey = url.searchParams.get("pubkey");
+  const code = url.searchParams.get("code");
+
+  // check token
+  const rec = await prisma.codes.findFirst({
+    where: {
+      npub: nip19.npubEncode(pubkey),
+      code,
+    },
+  });
+  console.log("code for", pubkey, code, rec);
+
+  // delete consumed token
+  if (rec)
+    await prisma.codes.delete({
+      where: {
+        id: rec.id,
+      },
+    });
+
+  if (!rec || Date.now() - Number(rec.timestamp) > OTP_TTL)
+    return sendError(res, "Bad code", 403);
+
+  const ip = getIp(req);
+  const token = createSessionToken(pubkey);
+  console.log(Date.now(), "new token for ip", ip, pubkey, token);
+
+  sendReply(res, { token });
+}
+
+async function apiEvent(req, res, ndk) {
+  if (req.method !== "POST") return sendError("Use post", 400);
+
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+  const relays = (url.searchParams.get("relays") || "")
+    .split(",")
+    .filter((r) => !!r);
+  if (!relays.length) return sendError(res, "Specify relays", 400);
+
+  const body = await new Promise((ok) => {
+    let d = "";
+    req.on("data", (chunk) => (d += chunk));
+    req.on("end", () => ok(d));
+  });
+
+  let event = undefined;
+  try {
+    event = JSON.parse(body);
+  } catch (e) {
+    console.log("Bad event", body);
+    return sendError(res, "Bad event", 400);
+  }
+
+  if (event.pubkey !== admin) return sendError(res, "Wrong pubkey", 400);
+  if (event.kind !== KIND_SITE) return sendError(res, "Wrong kind", 400);
+  if (!Array.isArray(event.tags)) return sendError(res, "Wrong tags", 400);
+
+  event.created_at = 0;
+
+  // ensure proper 'u' tag
+  event.tags = event.tags.filter((t) => t.length > 0 && t[0] !== "u");
+  event.tags.push(["u", admin]);
+
+  // ensure proper 'd' tag
+  const d_tag = tv(event, "d") || "";
+  event.tags = event.tags.filter((t) => t.length > 0 && t[0] !== "d");
+  event.tags.push(["d", d_tag + ":" + bytesToHex(randomBytes(6))]);
+
+  const key = getServerKey();
+  const signer = new NDKPrivateKeySigner(key);
+  const ne = new NDKEvent(ndk, event);
+  await ne.sign(signer);
+
+  console.log("signed", ne.rawEvent());
+
+  try {
+    const r = await ne.publish(NDKRelaySet.fromRelayUrls(relays, ndk), 10000);
+    console.log(Date.now(), "Published site event", ne.id, "by", ne.pubkey, "to", [...r].map(r => r.url));
+    sendReply(res, {
+      id: ne.id,
+    });
+  } catch (e) {
+    console.log("Failed to publish site event", ne.id, ne.pubkey);
+    return sendError(res, "Failed to publish to relays", 400);
+  }
+}
+
 async function api(host, port) {
   const s3 = new S3Client({ region: AWSRegion });
   const mutex = new AsyncMutex();
   const prisma = new PrismaClient();
+  const ndk = new NDK({
+    explicitRelayUrls: [...OUTBOX_RELAYS],
+  });
+  ndk.connect();
 
   const requestListener = async function (req, res) {
     console.log("request", req.method, req.url, req.headers);
@@ -2121,8 +2325,14 @@ async function api(host, port) {
         await apiDeploy(req, res, s3, prisma);
       } else if (req.url.startsWith("/check")) {
         await apiCheck(req, res, s3);
+      } else if (req.url.startsWith("/authotp")) {
+        await apiAuthOTP(req, res, prisma);
       } else if (req.url.startsWith("/auth")) {
         await apiAuth(req, res);
+      } else if (req.url.startsWith("/otp")) {
+        await apiOTP(req, res, prisma, ndk);
+      } else if (req.url.startsWith("/event")) {
+        await apiEvent(req, res, ndk);
       } else {
         sendError(res, "Unknown method", 400);
       }
@@ -2930,6 +3140,98 @@ async function spawn(cmd, args) {
   });
 }
 
+async function updateTheme(siteId) {
+  await ensureAuth();
+
+  const pubkey = (await signer.user()).pubkey;
+
+  const ndk = new NDK({
+    explicitRelayUrls: [SITE_RELAY, ...OUTBOX_RELAYS],
+  });
+  ndk.connect();
+
+  const addr = parseAddr(siteId);
+  const event = new NDKEvent(ndk, await fetchNostrSite(addr));
+  if (event.pubkey !== pubkey) throw new Error("Not your event");
+
+  const themePackageId = tv(event, "x");
+  const pkg = await ndk.fetchEvent(
+    {
+      kinds: [KIND_PACKAGE],
+      ids: [themePackageId],
+    },
+    { groupable: false },
+    NDKRelaySet.fromRelayUrls([SITE_RELAY], ndk)
+  );
+
+  const a = tv(pkg, "a");
+  console.log("current theme package", pkg.id, "theme", a);
+  const theme = await ndk.fetchEvent(
+    {
+      kinds: [parseInt(a.split(":")[0])],
+      authors: [a.split(":")[1]],
+      "#d": [a.split(":")[2]],
+    },
+    { groupable: false },
+    NDKRelaySet.fromRelayUrls([SITE_RELAY], ndk)
+  );
+
+  const e = tv(theme, "e");
+  console.log("current theme", theme.id, "latest package", e);
+
+  if (e === pkg.id) {
+    console.log("already latest theme version");
+    return;
+  }
+
+  const newPkg = await ndk.fetchEvent(
+    {
+      kinds: [KIND_PACKAGE],
+      ids: [e],
+    },
+    { groupable: false },
+    NDKRelaySet.fromRelayUrls([SITE_RELAY], ndk)
+  );
+
+  const title = tv(newPkg, "title") || "";
+  const version = tv(newPkg, "version") || "";
+  const name = title + (version ? " v." + version : "");
+
+  event.tags = event.tags.filter((t) => t.length < 2 || t[0] !== "x");
+  event.tags.push(["x", newPkg.id, SITE_RELAY, tv(newPkg, "x") || "", name]);
+
+  await event.sign(signer);
+  console.log("signed", event.rawEvent());
+
+  const relays = await fetchOutboxRelays(ndk, [pubkey]);
+  console.log("relays", relays);
+
+  const r = await event.publish(
+    NDKRelaySet.fromRelayUrls([SITE_RELAY, ...relays], ndk)
+  );
+  console.log(
+    "published to",
+    [...r].map((r) => r.url)
+  );
+}
+
+async function testEvent() {
+  await ensureAuth();
+
+  const pubkey = (await signer.user()).pubkey;
+  const event = {
+    kind: 100000+KIND_SITE,
+    pubkey,
+    content: "",
+    tags: [
+      ["d", "test-site"],
+      ["some", "tag"],
+    ],
+  };
+  const r = await fetchWithSession("http://localhost:8000/event?relays=wss://relay.damus.io", "POST", event);
+  console.log("r", r);
+}
+
 // main
 try {
   console.log(process.argv);
@@ -2938,7 +3240,12 @@ try {
     const dir = process.argv[3];
     const latest = method.includes("latest");
     const reupload = method.includes("reupload");
-    publishTheme(dir, latest, reupload).then(() => process.exit());
+    const includeFonts = method.includes("include_fonts");
+    publishTheme(dir, {
+      latest,
+      reupload,
+      includeFonts,
+    }).then(() => process.exit());
   } else if (method === "create_website") {
     const dist = process.argv[3];
     const naddr = process.argv[4];
@@ -3033,6 +3340,22 @@ try {
     const dir = process.argv[3];
     const path = process.argv[4];
     zipSiteDir(dir, path).then(() => process.exit());
+  } else if (method === "check_domain") {
+    const domain = process.argv[3];
+    const site = process.argv[4];
+    (async () => {
+      const reply = await fetchWithSession(
+        `${NPUB_PRO_API}/check?domain=${domain}&site=${site}`
+      );
+      console.log(reply);
+    })().then(() => process.exit());
+  } else if (method === "update_theme") {
+    const siteId = process.argv[3];
+    updateTheme(siteId).then(() => process.exit());
+  } else if (method === "generate_otp") {
+    console.log("otp", generateOTP());
+  } else if (method === "test_event") {
+    testEvent();
   }
 } catch (e) {
   console.error(e);

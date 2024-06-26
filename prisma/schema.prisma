@@ -31,3 +31,9 @@ model EventQueue {
   timestamp BigInt
 }
 
+model Codes {
+  id        Int  @id @default(autoincrement())
+  npub      String
+  code      String
+  timestamp BigInt
+}
