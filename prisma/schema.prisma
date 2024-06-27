@@ -37,3 +37,10 @@ model Codes {
   code      String
   timestamp BigInt
 }
+
+model Sites {
+  d_tag     String @id
+  pubkey    String
+
+  @@index([pubkey])
+}

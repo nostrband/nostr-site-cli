@@ -2243,7 +2243,7 @@ async function apiAuthOTP(req, res, prisma) {
   sendReply(res, { token });
 }
 
-async function apiEvent(req, res, ndk) {
+async function apiSite(req, res, prisma, ndk) {
   if (req.method !== "POST") return sendError("Use post", 400);
 
   const admin = parseSession(req);
@@ -2269,34 +2269,58 @@ async function apiEvent(req, res, ndk) {
     return sendError(res, "Bad event", 400);
   }
 
-  if (event.pubkey !== admin) return sendError(res, "Wrong pubkey", 400);
+  const key = getServerKey();
+  const serverPubkey = getPublicKey(key);
+
+  if (event.pubkey !== serverPubkey)
+    return sendError(res, "Wrong event pubkey", 400);
+  if (tv(event, "u") !== admin)
+    return sendError(res, "Wrong admin pubkey", 400);
   if (event.kind !== KIND_SITE) return sendError(res, "Wrong kind", 400);
   if (!Array.isArray(event.tags)) return sendError(res, "Wrong tags", 400);
 
+  const d_tag = tv(event, "d");
+  if (!d_tag.trim()) return sendError(res, "No d-tag", 400);
+
+  const existing = await prisma.sites.findFirst({
+    where: {
+      d_tag,
+    },
+  });
+  if (existing && existing.pubkey !== event.pubkey)
+    return sendError(res, "Not your site", 403);
+
+  // reset to ensure it's set to current timestamp
   event.created_at = 0;
 
-  // ensure proper 'u' tag
-  event.tags = event.tags.filter((t) => t.length > 0 && t[0] !== "u");
-  event.tags.push(["u", admin]);
-
-  // ensure proper 'd' tag, it must be random otherwise
-  // people will be able to overwrite other people's websites
-  const d_tag = tv(event, "d") || "";
-  event.tags = event.tags.filter((t) => t.length > 0 && t[0] !== "d");
-  event.tags.push(["d", d_tag + ":" + bytesToHex(randomBytes(8))]);
-
-  const key = getServerKey();
+  // sign event
   const signer = new NDKPrivateKeySigner(key);
   const ne = new NDKEvent(ndk, event);
   await ne.sign(signer);
-
   console.log("signed", ne.rawEvent());
+
+  // save to db
+  await prisma.sites.create({
+    data: {
+      d_tag,
+      pubkey: admin,
+    },
+  });
 
   try {
     const r = await ne.publish(NDKRelaySet.fromRelayUrls(relays, ndk), 10000);
-    console.log(Date.now(), "Published site event", ne.id, "by", ne.pubkey, "to", [...r].map(r => r.url));
+    console.log(
+      Date.now(),
+      "Published site event",
+      ne.id,
+      "by",
+      ne.pubkey,
+      "to",
+      [...r].map((r) => r.url)
+    );
+
     sendReply(res, {
-      event: ne.rawEvent()
+      event: ne.rawEvent(),
     });
   } catch (e) {
     console.log("Failed to publish site event", ne.id, ne.pubkey);
@@ -2332,8 +2356,8 @@ async function api(host, port) {
         await apiAuth(req, res);
       } else if (req.url.startsWith("/otp")) {
         await apiOTP(req, res, prisma, ndk);
-      } else if (req.url.startsWith("/event")) {
-        await apiEvent(req, res, ndk);
+      } else if (req.url.startsWith("/site")) {
+        await apiSite(req, res, prisma, ndk);
       } else {
         sendError(res, "Unknown method", 400);
       }
@@ -3217,19 +3241,22 @@ async function updateTheme(siteId) {
 }
 
 async function testEvent() {
-  await ensureAuth();
-
-  const pubkey = (await signer.user()).pubkey;
+  const pubkey = "08eade50df51da4a42f5dc045e35b371902e06d6a805215bec3d72dc687ccb04";
   const event = {
-    kind: 100000+KIND_SITE,
-    pubkey,
+    kind: 100000 + KIND_SITE,
+    pubkey: "08eade50df51da4a42f5dc045e35b371902e06d6a805215bec3d72dc687ccb04",
     content: "",
     tags: [
       ["d", "test-site"],
       ["some", "tag"],
+      ["u", pubkey],
     ],
   };
-  const r = await fetchWithSession("http://localhost:8000/event?relays=wss://relay.damus.io", "POST", event);
+  const r = await fetchWithSession(
+    "http://localhost:8000/site?relays=wss://relay.damus.io",
+    "POST",
+    event
+  );
   console.log("r", r);
 }
 
