@@ -1721,7 +1721,7 @@ async function sendReply(res, reply, status) {
   res.setHeader("Access-Control-Allow-Methods", "*");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Authorization, X-NpubPro-Token"
+    "Authorization, X-NpubPro-Token, Content-Type"
   );
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.writeHead(status || 200);
@@ -1767,7 +1767,7 @@ async function reserve(
       infoAddr.kind === addr.kind &&
       infoAddr.identifier === addr.identifier
     ) {
-      // all ok, already assigned
+      // all ok, already assigned to same site
       console.log("Already assigned", domain, site);
     } else if (
       info.domain === domain &&
@@ -1922,6 +1922,7 @@ async function apiDeploy(req, res, s3, prisma) {
   const info = await fetchDomainInfo(domain, s3);
   if (!info) return sendError(res, "Domain not assigned", 400);
 
+  // must be already reserved for this website
   const infoAddr = parseNaddr(info.site);
   if (
     info.domain !== domain ||
