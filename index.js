@@ -2301,12 +2301,13 @@ async function apiSite(req, res, prisma, ndk) {
   console.log("signed", ne.rawEvent());
 
   // save to db
-  await prisma.sites.create({
-    data: {
-      d_tag,
-      pubkey: admin,
-    },
-  });
+  if (!existing)
+    await prisma.sites.create({
+      data: {
+        d_tag,
+        pubkey: admin,
+      },
+    });
 
   try {
     const r = await ne.publish(NDKRelaySet.fromRelayUrls(relays, ndk), 10000);
@@ -3242,7 +3243,8 @@ async function updateTheme(siteId) {
 }
 
 async function testEvent() {
-  const pubkey = "08eade50df51da4a42f5dc045e35b371902e06d6a805215bec3d72dc687ccb04";
+  const pubkey =
+    "08eade50df51da4a42f5dc045e35b371902e06d6a805215bec3d72dc687ccb04";
   const event = {
     kind: 100000 + KIND_SITE,
     pubkey: "08eade50df51da4a42f5dc045e35b371902e06d6a805215bec3d72dc687ccb04",
