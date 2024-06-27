@@ -1825,7 +1825,8 @@ async function apiReserve(req, res, s3, prisma) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
 
-  const ipd = getIpDomains(req);
+  const ip = getIp(req);
+  const ipd = getIpDomains(ip);
   if (ipd > MAX_DOMAINS_PER_IP) return sendError(res, "Too many domains", 403);
 
   const url = new URL(req.url, "http://localhost");
@@ -1988,8 +1989,7 @@ function getIp(req) {
   return req.headers["x-real-ip"] || req.ip;
 }
 
-function getIpDomains(req) {
-  const ip = getIp(req);
+function getIpDomains(ip) {
   let { domains: lastDomains = 0, tm = 0 } = ipDomains.get(ip) || {};
   console.log("lastDomains", { ip, lastDomains, tm });
   if (lastDomains) {
@@ -2007,10 +2007,8 @@ function getIpDomains(req) {
   return lastDomains;
 }
 
-function getMinPow(req) {
+function getMinPow(ip) {
   let minPow = MIN_POW;
-
-  const ip = getIp(req);
 
   // have a record for this ip?
   let { pow: lastPow = 0, tm = 0 } = ipPows.get(ip) || {};
@@ -2108,7 +2106,8 @@ async function apiAuth(req, res) {
   const url = new URL(req.url, "http://localhost");
 
   const npub = url.searchParams.get("npub");
-  const minPow = getMinPow(req);
+  const ip = getIp(req);
+  const minPow = getMinPow(ip);
 
   if (!(await verifyAuthNostr(req, npub, "/auth", minPow)))
     return sendReply(
@@ -2125,7 +2124,6 @@ async function apiAuth(req, res) {
   // will != authPubkey if DM auth
   const tokenPubkey = authPubkey;
 
-  const ip = getIp(req);
   const token = createSessionToken(tokenPubkey);
   console.log(Date.now(), "new token for ip", ip, tokenPubkey, token);
 
@@ -2177,7 +2175,8 @@ async function apiOTP(req, res, prisma, ndk) {
 
   // we don't ask for pow in this method,
   // but we use pow counter for per-ip throttling
-  const minPow = getMinPow(req);
+  const ip = getIp(req);
+  const minPow = getMinPow(ip);
   if (minPow > MIN_POW + 10) return sendError(res, "Too many requests", 403);
 
   const relays = await fetchInboxRelays(ndk, [pubkey]);
@@ -2193,7 +2192,6 @@ async function apiOTP(req, res, prisma, ndk) {
 
   await sendOTP(pubkey, code, relays, ndk);
 
-  const ip = getIp(req);
   ipPows.set(ip, { pow: minPow, tm: Date.now() });
 
   sendReply(res, {
