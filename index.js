@@ -1647,7 +1647,6 @@ async function fetchDomainInfo(domain, s3) {
       const info = JSON.parse(content);
 
       if (
-        info.status === "reserved" &&
         info.expires &&
         info.expires < Date.now()
       ) {
@@ -1910,6 +1909,8 @@ async function apiDeploy(req, res, s3, prisma) {
 
   const domain = url.searchParams.get("domain").split(".npub.pro")[0];
   const site = url.searchParams.get("site");
+  const autoReserve = url.searchParams.get("reserver") === "true";
+  const from = url.searchParams.get("from");
 
   if (!domain || !site) return sendError(res, "Specify domain and site", 400);
 
@@ -1920,7 +1921,19 @@ async function apiDeploy(req, res, s3, prisma) {
   if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
 
   const info = await fetchDomainInfo(domain, s3);
-  if (!info) return sendError(res, "Domain not assigned", 400);
+  if (!info) {
+    if (!autoReserve)
+      return sendError(res, "Domain not assigned", 400);
+
+    console.log("auto-reserving", domain, "for", admin, "site", site);
+    const expires = Date.now() + 60000; // 5 minutes
+    await reserve(site, admin, domain, expires, s3, prisma, true);
+    info = {
+      site,
+      domain,
+      pubkey: admin
+    }
+  }
 
   // must be already reserved for this website
   const infoAddr = parseNaddr(info.site);
@@ -1943,6 +1956,16 @@ async function apiDeploy(req, res, s3, prisma) {
 
   // ensure local copy of this domain
   await upsertDomainInfo(prisma, data);
+
+  // make old domain expire soon
+  if (from && from !== domain) {
+    const oldInfo = await fetchDomainInfo(from, s3);
+    console.log("old info", oldInfo);
+    if (oldInfo.pubkey === admin) {
+      const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+      await putDomainInfo(oldInfo, "released", expires, s3);
+    }
+  }
 
   sendReply(res, {
     status: "deployed",
@@ -3146,7 +3169,7 @@ async function reservePubkeyDomain(pubkey, domain, months = 3) {
   }
   console.log("reserving", domain, "for", pubkey, "months", months);
 
-  const expires = Date.now() + months * 30 * 24 * 60 * 60;
+  const expires = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
   domain = await reserve(undefined, pubkey, domain, expires, s3, prisma, true);
   console.log("reserved", domain, "for", pubkey);
 }
