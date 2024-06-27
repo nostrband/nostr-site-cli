@@ -2288,7 +2288,7 @@ async function apiSite(req, res, prisma, ndk) {
       d_tag,
     },
   });
-  if (existing && existing.pubkey !== event.pubkey)
+  if (existing && existing.pubkey !== admin)
     return sendError(res, "Not your site", 403);
 
   // reset to ensure it's set to current timestamp
