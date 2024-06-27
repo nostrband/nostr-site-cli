@@ -147,7 +147,11 @@ const POW_PERIOD = 3600000; // 1h
 const MIN_POW = 11;
 const SESSION_TTL = 30 * 24 * 3600; // 1 month
 
+const DOMAINS_PERIOD = 3600000; // 1h
+const MAX_DOMAINS_PER_IP = 10;
+
 const ipPows = new Map();
+const ipDomains = new Map();
 
 let ncNdk;
 let signer;
@@ -1821,82 +1825,27 @@ async function apiReserve(req, res, s3, prisma) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
 
+  const ipd = getIpDomains(req);
+  if (ipd > MAX_DOMAINS_PER_IP) return sendError(res, "Too many domains", 403);
+
   const url = new URL(req.url, "http://localhost");
 
-  let domain = url.searchParams.get("domain");
+  const domain = url.searchParams.get("domain");
   const site = url.searchParams.get("site");
+  const noRetry = url.searchParams.get("no_retry") === "true";
   if (!domain || !site) return sendError(res, "Specify domain and site", 400);
 
   if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
     return sendError(res, "Bad domain '" + domain + "'", 400);
 
   const expires = Date.now() + 3600000; // 1 hour
-  domain = await reserve(site, admin, domain, expires, s3, prisma);
+  const assignedDomain = await reserve(site, admin, domain, expires, s3, prisma, noRetry);
 
-  // const addr = parseNaddr(site);
-  // if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
-
-  // let info = await fetchDomainInfo(domain, s3);
-  // console.log("existing info", info);
-
-  // if (info) {
-  //   const infoAddr = parseNaddr(info.site);
-  //   if (
-  //     info.domain === domain &&
-  //     info.pubkey === admin &&
-  //     infoAddr &&
-  //     infoAddr.pubkey === addr.pubkey &&
-  //     infoAddr.kind === addr.kind &&
-  //     infoAddr.identifier === addr.identifier
-  //   ) {
-  //     // all ok, already assigned
-  //     console.log("Already assigned", domain, site);
-  //   } else if (
-  //     info.domain === domain &&
-  //     info.pubkey === admin &&
-  //     info.status === "reserved" &&
-  //     !infoAddr
-  //   ) {
-  //     // all ok, we reserved this domain for this pubkey
-  //     console.log("Already reserved to pubkey", domain, info.pubkey);
-  //   } else {
-  //     // choose another domain for this site
-  //     console.log(
-  //       "Failed to reserve, already assigned",
-  //       domain,
-  //       "site",
-  //       info.site
-  //     );
-
-  //     // try 3 times to append XX number
-  //     for (let i = 0; i < 3; i++) {
-  //       const n = Math.floor(Math.random() * 100);
-  //       domain = `${domain}${n}`;
-  //       console.log("trying new domain", domain);
-  //       info = await fetchDomainInfo(domain, s3);
-  //       if (!info) break;
-  //     }
-  //     if (info) throw new Error("Failed to assign domain");
-  //   }
-  // }
-
-  // if (!info) {
-  //   const expires = Date.now() + 3600000; // 1 hour
-  //   const data = await putDomainInfo(
-  //     { domain, site, pubkey: admin },
-  //     "reserved",
-  //     expires,
-  //     s3
-  //   );
-  //   console.log("reserved", domain, site, data);
-  //   info = data;
-  // }
-
-  // // ensure local copy of this domain
-  // await upsertDomainInfo(prisma, info);
+  // update counter for this ip
+  ipDomains.set(ip, { domains: ipd, tm: Date.now() });
 
   sendReply(res, {
-    domain: `${domain}.npub.pro`,
+    domain: `${assignedDomain}.npub.pro`,
     site,
   });
 }
@@ -1909,7 +1858,7 @@ async function apiDeploy(req, res, s3, prisma) {
 
   const domain = url.searchParams.get("domain").split(".npub.pro")[0];
   const site = url.searchParams.get("site");
-  const autoReserve = url.searchParams.get("reserver") === "true";
+  // const autoReserve = url.searchParams.get("reserver") === "true";
   const from = url.searchParams.get("from");
 
   if (!domain || !site) return sendError(res, "Specify domain and site", 400);
@@ -1922,17 +1871,17 @@ async function apiDeploy(req, res, s3, prisma) {
 
   const info = await fetchDomainInfo(domain, s3);
   if (!info) {
-    if (!autoReserve)
-      return sendError(res, "Domain not assigned", 400);
+    // if (!autoReserve)
+    return sendError(res, "Domain not reserved", 400);
 
-    console.log("auto-reserving", domain, "for", admin, "site", site);
-    const expires = Date.now() + 60000; // 5 minutes
-    await reserve(site, admin, domain, expires, s3, prisma, true);
-    info = {
-      site,
-      domain,
-      pubkey: admin
-    }
+    // console.log("auto-reserving", domain, "for", admin, "site", site);
+    // const expires = Date.now() + 60000; // 5 minutes
+    // await reserve(site, admin, domain, expires, s3, prisma, true);
+    // info = {
+    //   site,
+    //   domain,
+    //   pubkey: admin
+    // }
   }
 
   // must be already reserved for this website
@@ -2037,6 +1986,25 @@ class AsyncMutex {
 
 function getIp(req) {
   return req.headers["x-real-ip"] || req.ip;
+}
+
+function getIpDomains(req) {
+  const ip = getIp(req);
+  let { domains: lastDomains = 0, tm = 0 } = ipDomains.get(ip) || {};
+  console.log("lastDomains", { ip, lastDomains, tm });
+  if (lastDomains) {
+    // refill: reduce threshold once per passed period
+    const age = Date.now() - tm;
+    const refill = Math.floor(age / DOMAINS_PERIOD);
+    lastDomains -= refill;
+  }
+
+  // if have lastPow - increment it and return
+  if (lastDomains && lastDomains >= 0) {
+    lastDomains = lastDomains + 1;
+  }
+
+  return lastDomains;
 }
 
 function getMinPow(req) {
