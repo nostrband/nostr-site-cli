@@ -2279,10 +2279,11 @@ async function apiEvent(req, res, ndk) {
   event.tags = event.tags.filter((t) => t.length > 0 && t[0] !== "u");
   event.tags.push(["u", admin]);
 
-  // ensure proper 'd' tag
+  // ensure proper 'd' tag, it must be random otherwise
+  // people will be able to overwrite other people's websites
   const d_tag = tv(event, "d") || "";
   event.tags = event.tags.filter((t) => t.length > 0 && t[0] !== "d");
-  event.tags.push(["d", d_tag + ":" + bytesToHex(randomBytes(6))]);
+  event.tags.push(["d", d_tag + ":" + bytesToHex(randomBytes(8))]);
 
   const key = getServerKey();
   const signer = new NDKPrivateKeySigner(key);
@@ -2295,7 +2296,7 @@ async function apiEvent(req, res, ndk) {
     const r = await ne.publish(NDKRelaySet.fromRelayUrls(relays, ndk), 10000);
     console.log(Date.now(), "Published site event", ne.id, "by", ne.pubkey, "to", [...r].map(r => r.url));
     sendReply(res, {
-      id: ne.id,
+      event: ne.rawEvent()
     });
   } catch (e) {
     console.log("Failed to publish site event", ne.id, ne.pubkey);
