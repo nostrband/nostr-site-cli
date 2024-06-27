@@ -1911,7 +1911,7 @@ async function apiDeploy(req, res, s3, prisma) {
   if (from && from !== domain) {
     const oldInfo = await fetchDomainInfo(from, s3);
     console.log("old info", oldInfo);
-    if (oldInfo.pubkey === admin) {
+    if (oldInfo && oldInfo.pubkey === admin) {
       const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
       await putDomainInfo(oldInfo, "released", expires, s3);
     }
