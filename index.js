@@ -1230,8 +1230,10 @@ async function zipSiteDir(dir, file) {
     // both index.html and 404 must be same files
     // that only bootstrap the renderer
     archive.file(dir + "/__404.html", { name: "404.html" });
-    archive.file(dir + "/.well-known/nostr.json", { name: ".well-known/nostr.json" });
     archive.file(dir + "/__404.html", { name: "index.html" });
+    archive.file(dir + "/.well-known/nostr.json", { name: ".well-known/nostr.json" });
+    archive.file(dir + "/robots.txt", { name: "robots.txt" });
+    archive.file(dir + "/sitemap.txt", { name: "sitemap.txt" });
     archive.file(dir + "/manifest.webmanifest", {
       name: "manifest.webmanifest",
     });
