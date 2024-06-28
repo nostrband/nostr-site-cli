@@ -1139,7 +1139,6 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
       start_url: site.url,
       display: "standalone",
       background_color: "#ffffff",
-      //      lang: "en", // FIXME why?
       scope: site.url,
       description: site.description,
       theme_color: site.accent_color,
@@ -1152,6 +1151,16 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     fs.writeFileSync(`${dir}/manifest.webmanifest`, JSON.stringify(man), {
       encoding: "utf-8",
     });
+
+    // nostr.json
+    fs.mkdirSync(`${dir}/.well-known`);
+    const json = {
+      names: {
+        "_": site.admin_pubkey,
+      },
+      relays: {}
+    };
+    fs.writeFileSync(`${dir}/.well-known/nostr.json`, JSON.stringify(json))
 
     // not-found handler.
     // we don't know if object actually doesn't exist or
@@ -1221,6 +1230,7 @@ async function zipSiteDir(dir, file) {
     // both index.html and 404 must be same files
     // that only bootstrap the renderer
     archive.file(dir + "/__404.html", { name: "404.html" });
+    archive.file(dir + "/.well-known/nostr.json", { name: ".well-known/nostr.json" });
     archive.file(dir + "/__404.html", { name: "index.html" });
     archive.file(dir + "/manifest.webmanifest", {
       name: "manifest.webmanifest",
