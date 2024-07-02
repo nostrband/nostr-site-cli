@@ -4,13 +4,9 @@ dotenv.config({ path: "./.env.local" });
 import WebSocket from "ws";
 global.WebSocket ??= WebSocket;
 
-//import crypto from "node:crypto";
-//global.crypto = crypto;
-
 import { File, Blob } from "@web-std/file";
 global.File = File;
 global.Blob = Blob;
-//global.FileReader = FileReader;
 
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils";
@@ -34,16 +30,10 @@ import {
   CreateBucketCommand,
   GetObjectCommand,
   PutObjectCommand,
-  // ListObjectsV2Command,
-  // ListBucketsCommand,
-  // DeletePublicAccessBlockCommand,
-  // PutBucketAclCommand
 } from "@aws-sdk/client-s3";
 import {
   CloudFrontClient,
-  // GetDistributionCommand,
   CreateDistributionCommand,
-  // CreateCloudFrontOriginAccessIdentityCommand,
 } from "@aws-sdk/client-cloudfront";
 import {
   parseAddr,
@@ -74,7 +64,6 @@ import {
   verifySignature,
   getPublicKey,
   nip04,
-  validateEvent,
 } from "nostr-tools";
 import readline from "node:readline";
 import { minePow } from "./pow.js";
