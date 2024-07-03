@@ -1134,8 +1134,16 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
       theme_color: site.accent_color,
       icons: [
         // FIXME default icon => npub.pro icon!
-        { src: site.icon || "", sizes: "192x192", type: mime.lookup(site.icon) },
-        { src: site.icon || "", sizes: "512x512", type: mime.lookup(site.icon) },
+        {
+          src: site.icon || "",
+          sizes: "192x192",
+          type: mime.lookup(site.icon),
+        },
+        {
+          src: site.icon || "",
+          sizes: "512x512",
+          type: mime.lookup(site.icon),
+        },
       ],
     };
     fs.writeFileSync(`${dir}/manifest.webmanifest`, JSON.stringify(man), {
@@ -1146,11 +1154,11 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     fs.mkdirSync(`${dir}/.well-known`);
     const json = {
       names: {
-        "_": site.admin_pubkey,
+        _: site.admin_pubkey,
       },
-      relays: {}
+      relays: {},
     };
-    fs.writeFileSync(`${dir}/.well-known/nostr.json`, JSON.stringify(json))
+    fs.writeFileSync(`${dir}/.well-known/nostr.json`, JSON.stringify(json));
 
     // not-found handler.
     // we don't know if object actually doesn't exist or
@@ -1221,7 +1229,9 @@ async function zipSiteDir(dir, file) {
     // that only bootstrap the renderer
     archive.file(dir + "/__404.html", { name: "404.html" });
     archive.file(dir + "/__404.html", { name: "index.html" });
-    archive.file(dir + "/.well-known/nostr.json", { name: ".well-known/nostr.json" });
+    archive.file(dir + "/.well-known/nostr.json", {
+      name: ".well-known/nostr.json",
+    });
     archive.file(dir + "/robots.txt", { name: "robots.txt" });
     archive.file(dir + "/manifest.webmanifest", {
       name: "manifest.webmanifest",
@@ -1635,7 +1645,7 @@ function getReservedKey(key) {
   return `reserved/${key}`;
 }
 
-async function fetchDomainInfo(domain, s3) {
+async function fetchDomainInfo(domain, s3, skipExpired = true) {
   const fetchKey = async (key) => {
     try {
       console.log("fetching", key);
@@ -1651,10 +1661,7 @@ async function fetchDomainInfo(domain, s3) {
 
       const info = JSON.parse(content);
 
-      if (
-        info.expires &&
-        info.expires < Date.now()
-      ) {
+      if (skipExpired && info.expires && info.expires < Date.now()) {
         console.log("Reserved info expired", info);
         return undefined;
       }
@@ -1841,7 +1848,15 @@ async function apiReserve(req, res, s3, prisma) {
     return sendError(res, "Bad domain '" + domain + "'", 400);
 
   const expires = Date.now() + 3600000; // 1 hour
-  const assignedDomain = await reserve(site, admin, domain, expires, s3, prisma, noRetry);
+  const assignedDomain = await reserve(
+    site,
+    admin,
+    domain,
+    expires,
+    s3,
+    prisma,
+    noRetry
+  );
 
   // update counter for this ip
   ipDomains.set(ip, { domains: ipd, tm: Date.now() });
@@ -3263,28 +3278,27 @@ async function resyncLocalDb() {
     const cmd = new ListObjectsV2Command({
       Bucket: DOMAINS_BUCKET,
       MaxKeys: 1000,
-      ContinuationToken: token
+      ContinuationToken: token,
     });
     const r = await s3.send(cmd);
     console.log("r", r.KeyCount, token);
-    keys.push(...r.Contents.map(c => c.Key));
+    keys.push(...r.Contents.map((c) => c.Key));
     token = r.NextContinuationToken;
   } while (token);
 
   console.log("keys", keys);
 
   for (const key of keys) {
-    const domain = key.split('/').pop().split('.json')[0];
+    const domain = key.split("/").pop().split(".json")[0];
     if (!domain) continue;
     console.log("domain", domain);
-    const info = await fetchDomainInfo(domain, s3);
-    if (!info) throw new Error("Failed to fetch info for "+domain);
+    const info = await fetchDomainInfo(domain, s3, false);
+    if (!info) throw new Error("Failed to fetch info for " + domain);
     await upsertDomainInfo(prisma, info);
   }
 
   console.log("done");
 }
-
 
 // main
 try {
