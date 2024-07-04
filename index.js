@@ -1116,9 +1116,15 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
   `;
     fs.writeFileSync(`${dir}/robots.txt`, robots, { encoding: "utf-8" });
 
+    // FIXME could we impring random revisions for each file?
+    // also should we include the sw.js itself? 
+    // if sw.js could be omitted the we could include real hashes of index.js and manifest,
+    // otherwise we probably should just force a revision by including random string
+    // on every re-build of the files 
+    const rev = Date.now(); 
     const sw = `
     importScripts("${INDEX_URL}");
-    self.nostrSite.startSW([{ url: "${INDEX_URL}", revision: null }, { url: "${renderer.settings.url}sw.js", revision: null }, { url: "${renderer.settings.url}manifest.webmanifest", revision: null }]);
+    self.nostrSite.startSW([{ url: "${INDEX_URL}", revision: "${rev}" }, { url: "${renderer.settings.url}sw.js", revision: "${rev+1}" }, { url: "${renderer.settings.url}manifest.webmanifest", revision: "${rev+2}" }]);
   `;
     fs.writeFileSync(`${dir}/sw.js`, sw, { encoding: "utf-8" });
 
