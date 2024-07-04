@@ -1750,6 +1750,7 @@ async function sendReply(res, reply, status) {
 }
 
 async function sendError(res, msg, status) {
+  console.error("error", msg);
   sendReply(res, { error: msg }, status);
 }
 
