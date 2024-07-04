@@ -1117,14 +1117,18 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     fs.writeFileSync(`${dir}/robots.txt`, robots, { encoding: "utf-8" });
 
     // FIXME could we impring random revisions for each file?
-    // also should we include the sw.js itself? 
+    // also should we include the sw.js itself?
     // if sw.js could be omitted the we could include real hashes of index.js and manifest,
     // otherwise we probably should just force a revision by including random string
-    // on every re-build of the files 
-    const rev = Date.now(); 
+    // on every re-build of the files
+    const rev = Date.now();
     const sw = `
     importScripts("${INDEX_URL}");
-    self.nostrSite.startSW([{ url: "${INDEX_URL}", revision: "${rev}" }, { url: "${renderer.settings.url}sw.js", revision: "${rev+1}" }, { url: "${renderer.settings.url}manifest.webmanifest", revision: "${rev+2}" }]);
+    self.nostrSite.startSW([{ url: "${INDEX_URL}", revision: "${rev}" }, { url: "${
+      renderer.settings.url
+    }sw.js", revision: "${rev + 1}" }, { url: "${
+      renderer.settings.url
+    }manifest.webmanifest", revision: "${rev + 2}" }]);
   `;
     fs.writeFileSync(`${dir}/sw.js`, sw, { encoding: "utf-8" });
 
@@ -1912,10 +1916,10 @@ async function apiDeploy(req, res, s3, prisma) {
   if (
     info.domain !== domain ||
     info.pubkey !== admin ||
-    !infoAddr ||
-    infoAddr.pubkey !== addr.pubkey ||
-    infoAddr.identifier !== addr.identifier ||
-    infoAddr.kind !== addr.kind
+    (infoAddr &&
+      (infoAddr.pubkey !== addr.pubkey ||
+        infoAddr.identifier !== addr.identifier ||
+        infoAddr.kind !== addr.kind))
   )
     return sendError(res, "Wrong site", 400);
 
@@ -3433,6 +3437,14 @@ try {
     testEvent();
   } else if (method === "resync_local_db") {
     resyncLocalDb();
+  } else if (method === "naddr") {
+    console.log(
+      nip19.naddrEncode({
+        kind: Number(process.argv[3]),
+        pubkey: process.argv[4],
+        identifier: process.argv[3],
+      })
+    );
   }
 } catch (e) {
   console.error(e);
