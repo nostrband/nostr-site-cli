@@ -2829,7 +2829,7 @@ async function ssrRender() {
           relays: [SITE_RELAY],
         });
         console.log("rendering", d.domain, naddr, "paths", paths.length);
-        await spawn("release_website", [naddr, ...paths]);
+        await spawn("release_website_zip", [naddr, ...paths]);
 
         //        await releaseWebsite(naddr, paths);
       };
@@ -3333,11 +3333,12 @@ try {
     const dir = process.argv[3];
     const naddr = process.argv[4];
     renderWebsite(dir, naddr).then(() => process.exit());
-  } else if (method === "release_website") {
+  } else if (method.startsWith("release_website")) {
     const naddr = process.argv[3];
+    const zip = method.includes("zip");
     const paths = [];
     for (let i = 4; i < process.argv.length; i++) paths.push(process.argv[i]);
-    releaseWebsite(naddr, paths).then(() => process.exit());
+    releaseWebsite(naddr, paths, { zip }).then(() => process.exit());
   } else if (method === "test_upload_aws") {
     uploadAWS().then(process.exit());
   } else if (method === "api") {
