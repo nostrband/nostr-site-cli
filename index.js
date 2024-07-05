@@ -1112,7 +1112,7 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     const robots = `
   User-agent: *
   Allow: /
-  Sitemap: ${renderer.settings.origin}/sitemap.txt  
+  Sitemap: ${renderer.settings.origin}${renderer.settings.url}sitemap.txt
   `;
     fs.writeFileSync(`${dir}/robots.txt`, robots, { encoding: "utf-8" });
 
