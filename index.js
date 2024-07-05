@@ -1551,7 +1551,7 @@ async function testDeploy(pubkey, kinds, hashtags, themePackageId) {
   const name = meta.name || meta.display_name;
   console.log("name", name);
 
-  const requestedDomain = slugify(name);
+  const requestedDomain = slugify(name).replace('_', '-');
 
   const siteEvent = {
     created_at: Math.floor(Date.now() / 1000),
@@ -1848,6 +1848,10 @@ async function reserve(
   return domain;
 }
 
+function isValidDomain(d) {
+  return d.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/) || d.match(/^[a-z0-9][a-z0-9]$/);
+}
+
 async function apiReserve(req, res, s3, prisma) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
@@ -1863,7 +1867,7 @@ async function apiReserve(req, res, s3, prisma) {
   const noRetry = url.searchParams.get("no_retry") === "true";
   if (!domain || !site) return sendError(res, "Specify domain and site", 400);
 
-  if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
+  if (!isValidDomain(domain))
     return sendError(res, "Bad domain '" + domain + "'", 400);
 
   const expires = Date.now() + 3600000; // 1 hour
@@ -1903,7 +1907,7 @@ async function apiDeploy(req, res, s3, prisma) {
   if (domain) {
     if (!domain || !site) return sendError(res, "Specify domain and site", 400);
 
-    if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
+    if (!isValidDomain(domain))
       return sendError(res, "Bad domain '" + domain + "'", 400);
   } else {
     // if person changed address to external and thus domain is empty?
@@ -1991,7 +1995,7 @@ async function apiCheck(req, res, s3) {
 
   if (!domain || !site) return sendError(res, "Specify domain and site", 400);
 
-  if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
+  if (!isValidDomain(domain))
     return sendError(res, "Bad domain '" + domain + "'", 400);
 
   const addr = parseNaddr(site);
