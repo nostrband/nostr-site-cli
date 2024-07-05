@@ -1482,6 +1482,12 @@ async function getSessionToken() {
   }
 }
 
+async function getAdminSessionToken(pubkey) {
+  const token = createSessionToken(pubkey);
+  const file = homedir + "/.nostr-site-cli-token.json";
+  fs.writeFileSync(file, token);
+}
+
 async function fetchWithSession(url, method = "GET", body = undefined) {
   const file = homedir + "/.nostr-site-cli-token.json";
   const token = fs.readFileSync(file);
@@ -1884,18 +1890,40 @@ async function apiDeploy(req, res, s3, prisma) {
 
   const url = new URL(req.url, "http://localhost");
 
-  const domain = url.searchParams.get("domain").split(".npub.pro")[0];
+  let domain = url.searchParams.get("domain").split(".npub.pro")[0];
   const site = url.searchParams.get("site");
   // const autoReserve = url.searchParams.get("reserver") === "true";
   const from = url.searchParams.get("from");
 
-  if (!domain || !site) return sendError(res, "Specify domain and site", 400);
-
-  if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
-    return sendError(res, "Bad domain '" + domain + "'", 400);
-
   const addr = parseNaddr(site);
   if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
+
+  if (domain) {
+    if (!domain || !site) return sendError(res, "Specify domain and site", 400);
+
+    if (!domain.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/))
+      return sendError(res, "Bad domain '" + domain + "'", 400);
+  } else {
+    // if person changed address to external and thus domain is empty?
+    // then we search for this site in our local db and redeploy there
+    // to rebuild their dist.zip etc
+    const sites = await prisma.domain.findMany({
+      where: {
+        pubkey: admin,
+      },
+    });
+    const site = sites.find((s) => {
+      const a = parseNaddr(s.site);
+      return (
+        a.pubkey === addr.pubkey &&
+        a.identifier === addr.identifier &&
+        a.kind === addr.kind
+      );
+    });
+    if (!site) return sendError(res, "Site not found", 404);
+    domain = site.domain;
+    console.log("Domain for site", domain);
+  }
 
   const info = await fetchDomainInfo(domain, s3);
   if (!info) {
@@ -3091,13 +3119,23 @@ async function publishSiteEvent(
 }
 
 async function deploySite(domain, naddr) {
-  await ensureAuth();
+  // await ensureAuth();
 
-  const adminPubkey = (await signer.user()).pubkey;
+  // const adminPubkey = (await signer.user()).pubkey;
   const deployReply = await fetchWithSession(
     `${NPUB_PRO_API}/deploy?domain=${domain}&site=${naddr}`
   );
   console.log(Date.now(), "deployed", deployReply);
+}
+
+async function reserveSite(domain, naddr, noRetry) {
+  // await ensureAuth();
+
+  // const adminPubkey = (await signer.user()).pubkey;
+  const reply = await fetchWithSession(
+    `${NPUB_PRO_API}/reserve?domain=${domain}&site=${naddr}&no_retry=${noRetry}`
+  );
+  console.log(Date.now(), "reserved", reply);
 }
 
 function getSessionCipher() {
@@ -3368,6 +3406,11 @@ try {
     const domain = process.argv[3];
     const naddr = process.argv[4];
     deploySite(domain, naddr).then(() => process.exit());
+  } else if (method.startsWith("reserve_site")) {
+    const domain = process.argv[3];
+    const naddr = process.argv[4];
+    const noRetry = method.includes("no_retry");
+    reserveSite(domain, naddr, noRetry).then(() => process.exit());
   } else if (method === "test_aws") {
     testAWS();
   } else if (method === "test_bundle") {
@@ -3402,6 +3445,9 @@ try {
     console.log("data", data);
   } else if (method === "get_session_token") {
     getSessionToken();
+  } else if (method === "get_admin_session_token") {
+    const pubkey = process.argv[3];
+    getAdminSessionToken(pubkey);
   } else if (method === "theme_by_name") {
     const name = process.argv[3];
     getThemeByName(name);
