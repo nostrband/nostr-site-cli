@@ -1256,7 +1256,7 @@ async function zipSiteDir(dir, file) {
 async function releaseWebsite(
   naddr,
   paths,
-  { preview = false, zip = false } = {}
+  { preview = false, zip = false, domain = "" } = {}
 ) {
   const dir = "tmp_" + Date.now();
   fs.mkdirSync(dir);
@@ -1264,14 +1264,16 @@ async function releaseWebsite(
 
   const site = await renderWebsite(dir, naddr, paths, preview);
   console.warn(Date.now(), "origin", site.origin);
-  const url = new URL(site.origin.toLowerCase());
-  if (!url.hostname.endsWith(".npub.pro")) throw new Error("Unknown subdomain");
 
   if (zip) {
     await zipSiteDir(dir, dir + "/dist.zip");
   }
 
-  const domain = url.hostname.split(".")[0];
+  if (!domain) {
+    const url = new URL(site.origin.toLowerCase());
+    if (!url.hostname.endsWith(".npub.pro")) throw new Error("Unknown subdomain");
+    domain = url.hostname.split(".")[0];  
+  }
   await uploadWebsite(dir, domain);
 
   //  fs.rmSync(dir, { recursive: true });
@@ -1953,7 +1955,7 @@ async function apiDeploy(req, res, s3, prisma) {
     return sendError(res, "Wrong site", 400);
 
   // pre-render one page and publish
-  await releaseWebsite(site, ["/"], { preview: true, zip: true });
+  await releaseWebsite(site, ["/"], { preview: true, zip: true, domain });
 
   // FIXME expires when?
   const expires = 0;
