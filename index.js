@@ -1258,6 +1258,7 @@ async function releaseWebsite(
   paths,
   { preview = false, zip = false, domain = "" } = {}
 ) {
+  console.log("release", { naddr, paths: paths.length, preview, zip, domain });
   const dir = "tmp_" + Date.now();
   fs.mkdirSync(dir);
   console.warn(Date.now(), "dir", dir);
@@ -1959,7 +1960,9 @@ async function apiDeploy(req, res, s3, prisma) {
     return sendError(res, "Wrong site", 400);
 
   // pre-render one page and publish
-  await releaseWebsite(site, ["/"], { preview: true, zip: true, domain });
+  await spawn("release_website_zip_preview", [naddr, "/", "domain:" + domain]);
+
+  // await releaseWebsite(site, ["/"], { preview: true, zip: true, domain });
 
   // FIXME expires when?
   const expires = 0;
@@ -3385,9 +3388,17 @@ try {
   } else if (method.startsWith("release_website")) {
     const naddr = process.argv[3];
     const zip = method.includes("zip");
+    const preview = method.includes("preview");
     const paths = [];
-    for (let i = 4; i < process.argv.length; i++) paths.push(process.argv[i]);
-    releaseWebsite(naddr, paths, { zip }).then(() => process.exit());
+    let domain = undefined;
+    for (let i = 4; i < process.argv.length; i++) {
+      if (process.argv[i].startsWith("domain:")) {
+        domain = process.argv[i].split("domain:")[1];
+      } else {
+        paths.push(process.argv[i]);
+      }
+    }
+    releaseWebsite(naddr, paths, { zip, preview, domain }).then(() => process.exit());
   } else if (method === "test_upload_aws") {
     uploadAWS().then(process.exit());
   } else if (method === "api") {
