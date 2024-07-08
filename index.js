@@ -1964,7 +1964,9 @@ async function apiDeploy(req, res, s3, prisma) {
 
   // await releaseWebsite(site, ["/"], { preview: true, zip: true, domain });
 
-  // FIXME expires when?
+  // set the site
+  info.site = site;
+
   const expires = 0;
   const data = await putDomainInfo(info, "deployed", expires, s3);
 
