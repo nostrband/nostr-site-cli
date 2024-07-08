@@ -1960,7 +1960,7 @@ async function apiDeploy(req, res, s3, prisma) {
     return sendError(res, "Wrong site", 400);
 
   // pre-render one page and publish
-  await spawn("release_website_zip_preview", [naddr, "/", "domain:" + domain]);
+  await spawn("release_website_zip_preview", [site, "/", "domain:" + domain]);
 
   // await releaseWebsite(site, ["/"], { preview: true, zip: true, domain });
 
