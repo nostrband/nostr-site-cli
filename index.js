@@ -24,6 +24,7 @@ import { PrismaClient } from "@prisma/client";
 import childProcess from "child_process";
 import archiver from "archiver";
 
+// guides https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/s3/
 import {
   S3Client,
   PutBucketPolicyCommand,
@@ -71,11 +72,14 @@ import { minePow } from "./pow.js";
 import { getProfileSlug } from "libnostrsite";
 import { fetchNostrSite } from "libnostrsite";
 import { fetchInboxRelays } from "libnostrsite";
+import { fetchOutboxRelays } from "libnostrsite";
+import { fetchEvent } from "libnostrsite";
 
 const AWSRegion = "eu-north-1";
 
 const KIND_PROFILE = 0;
 const KIND_CONTACTS = 3;
+const KIND_DELETE = 5;
 const KIND_RELAYS = 10002;
 const KIND_FILE = 1063;
 const KIND_PACKAGE = 1036;
@@ -116,16 +120,18 @@ const DEFAULT_RELAYS = [
 ];
 
 const OUTBOX_RELAYS = [
-  "wss://purplepag.es/",
-  "wss://user.kindpag.es/",
-  // "wss://relay.nos.social/",
+  "wss://purplepag.es",
+  "wss://user.kindpag.es",
+  "wss://relay.nos.social",
 ];
 
 const BLACKLISTED_RELAYS = [
   // doesn't return EOSE, always have to wait for timeout
-  "wss//nostr.mutinywallet.com/",
+  "wss://nostr.mutinywallet.com/",
   "wss://brb.io/",
 ];
+
+const BROADCAST_RELAYS = ["wss://nostr.mutinywallet.com/"];
 
 const SITE_RELAY = "wss://relay.npubpro.com";
 
@@ -1272,8 +1278,9 @@ async function releaseWebsite(
 
   if (!domain) {
     const url = new URL(site.origin.toLowerCase());
-    if (!url.hostname.endsWith(".npub.pro")) throw new Error("Unknown subdomain");
-    domain = url.hostname.split(".")[0];  
+    if (!url.hostname.endsWith(".npub.pro"))
+      throw new Error("Unknown subdomain");
+    domain = url.hostname.split(".")[0];
   }
   await uploadWebsite(dir, domain);
 
@@ -1281,53 +1288,53 @@ async function releaseWebsite(
   console.warn(Date.now(), "done uploading", naddr, site.origin);
 }
 
-async function fetchOutboxRelays(ndk, pubkeys) {
-  const events = await ndk.fetchEvents(
-    {
-      // @ts-ignore
-      kinds: [KIND_CONTACTS, KIND_RELAYS],
-      authors: pubkeys,
-    },
-    { groupable: false },
-    NDKRelaySet.fromRelayUrls(OUTBOX_RELAYS, ndk)
-  );
+// async function fetchOutboxRelays(ndk, pubkeys) {
+//   const events = await ndk.fetchEvents(
+//     {
+//       // @ts-ignore
+//       kinds: [KIND_CONTACTS, KIND_RELAYS],
+//       authors: pubkeys,
+//     },
+//     { groupable: false },
+//     NDKRelaySet.fromRelayUrls(OUTBOX_RELAYS, ndk)
+//   );
 
-  const writeRelays = [];
+//   const writeRelays = [];
 
-  for (const e of events) {
-    if (e.kind === KIND_RELAYS) {
-      writeRelays.push(
-        ...e.tags
-          .filter(
-            (t) =>
-              t.length >= 2 &&
-              t[0] === "r" &&
-              (t.length === 2 || t[2] === "write")
-          )
-          .map((t) => t[1])
-      );
-    } else {
-      try {
-        const relays = JSON.parse(e.content);
-        for (const url in relays) {
-          if (relays[url].write) writeRelays.push(url);
-        }
-      } catch {}
-    }
-  }
+//   for (const e of events) {
+//     if (e.kind === KIND_RELAYS) {
+//       writeRelays.push(
+//         ...e.tags
+//           .filter(
+//             (t) =>
+//               t.length >= 2 &&
+//               t[0] === "r" &&
+//               (t.length === 2 || t[2] === "write")
+//           )
+//           .map((t) => t[1])
+//       );
+//     } else {
+//       try {
+//         const relays = JSON.parse(e.content);
+//         for (const url in relays) {
+//           if (relays[url].write) writeRelays.push(url);
+//         }
+//       } catch {}
+//     }
+//   }
 
-  return [
-    ...new Set(
-      writeRelays
-        .map((r) => {
-          try {
-            return new URL(r).href;
-          } catch {}
-        })
-        .filter((u) => !!u)
-    ),
-  ];
-}
+//   return [
+//     ...new Set(
+//       writeRelays
+//         .map((r) => {
+//           try {
+//             return new URL(r).href;
+//           } catch {}
+//         })
+//         .filter((u) => !!u)
+//     ),
+//   ];
+// }
 
 async function fetchProfile(ndk, pubkey) {
   return ndk.fetchEvent(
@@ -1552,7 +1559,7 @@ async function testDeploy(pubkey, kinds, hashtags, themePackageId) {
   const name = meta.name || meta.display_name;
   console.log("name", name);
 
-  const requestedDomain = slugify(name).replace('_', '-');
+  const requestedDomain = slugify(name).replace("_", "-");
 
   const siteEvent = {
     created_at: Math.floor(Date.now() / 1000),
@@ -1808,6 +1815,13 @@ async function reserve(
     ) {
       // all ok, we reserved this domain for this pubkey
       console.log("Already reserved to pubkey", domain, info.pubkey);
+    } else if (
+      info.domain === domain &&
+      info.pubkey === admin &&
+      info.status === "released"
+    ) {
+      // all ok, this domain was released by this pubkey
+      console.log("Released by pubkey", domain, info.pubkey);
     } else {
       // choose another domain for this site
       console.log(
@@ -1850,7 +1864,9 @@ async function reserve(
 }
 
 function isValidDomain(d) {
-  return d.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/) || d.match(/^[a-z0-9][a-z0-9]$/);
+  return (
+    d.match(/^[a-z0-9][a-z0-9-]+[a-z0-9]$/) || d.match(/^[a-z0-9][a-z0-9]$/)
+  );
 }
 
 async function apiReserve(req, res, s3, prisma) {
@@ -1985,6 +2001,64 @@ async function apiDeploy(req, res, s3, prisma) {
 
   sendReply(res, {
     status: "deployed",
+    expires,
+  });
+}
+
+async function apiDelete(req, res, s3, prisma) {
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+
+  let domain = url.searchParams.get("domain").split(".npub.pro")[0];
+  const site = url.searchParams.get("site");
+  const addr = parseNaddr(site);
+  if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
+
+  const sites = await prisma.domain.findMany({
+    where: {
+      pubkey: admin,
+    },
+  });
+  const domainSite = sites.find((s) => {
+    const a = parseNaddr(s.site);
+    return (
+      a.pubkey === addr.pubkey &&
+      a.identifier === addr.identifier &&
+      a.kind === addr.kind &&
+      (!domain || a.domain === domain)
+    );
+  });
+  if (!domainSite) return sendError(res, "Site not found", 404);
+  domain = domainSite.domain;
+  console.log("Domain for deleted site", domain);
+
+  const info = await fetchDomainInfo(domain, s3);
+  if (!info) return sendError(res, "Domain not reserved", 400);
+
+  // must be already reserved for this website
+  const infoAddr = parseNaddr(info.site);
+  if (
+    info.domain !== domain ||
+    info.pubkey !== admin ||
+    !infoAddr ||
+    infoAddr.pubkey !== addr.pubkey ||
+    infoAddr.identifier !== addr.identifier ||
+    infoAddr.kind !== addr.kind
+  )
+    return sendError(res, "Wrong site", 400);
+
+  // mark as released for several days
+  const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  const data = await putDomainInfo(info, "released", expires, s3);
+
+  // ensure local copy of this domain
+  await upsertDomainInfo(prisma, data);
+
+  // done
+  sendReply(res, {
+    status: "released",
     expires,
   });
 }
@@ -2369,12 +2443,13 @@ async function apiSite(req, res, prisma, ndk) {
     console.log(
       Date.now(),
       "Published site event",
-      ne.id,
+      d_tag,
       "by",
-      ne.pubkey,
+      admin,
       "to",
       [...r].map((r) => r.url)
     );
+    if (!r.size) throw new Error("Failed to publish site");
 
     sendReply(res, {
       event: ne.rawEvent(),
@@ -2383,6 +2458,91 @@ async function apiSite(req, res, prisma, ndk) {
     console.log("Failed to publish site event", ne.id, ne.pubkey);
     return sendError(res, "Failed to publish to relays", 400);
   }
+}
+
+async function apiDeleteSite(req, res, prisma, ndk) {
+  if (req.method !== "DELETE") return sendError("Use delete", 400);
+
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+  const site = url.searchParams.get("site");
+  const relays = (url.searchParams.get("relays") || "")
+    .split(",")
+    .filter((r) => !!r);
+
+  if (!site) return sendError("Specify site");
+  if (!relays.length) return sendError(res, "Specify relays", 400);
+
+  const key = getServerKey();
+  const serverPubkey = getPublicKey(key);
+
+  const addr = parseAddr(site);
+  if (addr.pubkey !== serverPubkey)
+    return sendError(res, "Wrong event pubkey", 400);
+
+  const existing = await prisma.sites.findFirst({
+    where: {
+      d_tag: addr.identifier,
+    },
+  });
+  if (!existing || existing.pubkey !== admin)
+    return sendError(res, "Not your site", 403);
+
+  const delReq = {
+    kind: KIND_DELETE,
+    pubkey: serverPubkey,
+    content: "",
+    // NIP-09 when an 'a' tag is used, relays SHOULD delete all versions
+    // of the replaceable event *up to the created_at* timestamp of the deletion event.
+    created_at: event.created_at + 1,
+    tags: [
+      ["a", `${KIND_SITE}:${addr.pubkey}:${addr.identifier}`],
+      ["e", event.id],
+    ],
+  };
+
+  // sign event
+  const signer = new NDKPrivateKeySigner(key);
+  const ne = new NDKEvent(ndk, delReq);
+  await ne.sign(signer);
+  console.log("signed site deletion request", ne.rawEvent());
+
+  try {
+    const r = await ne.publish(
+      NDKRelaySet.fromRelayUrls(
+        [SITE_RELAY, ...BROADCAST_RELAYS, ...relays],
+        ndk
+      ),
+      10000
+    );
+    console.log(
+      Date.now(),
+      "Published site deletion request event",
+      ne.id,
+      "for",
+      addr.identifier,
+      "to",
+      [...r].map((r) => r.url)
+    );
+    if (!r.size) throw new Error("Failed to publish deletion request");
+  } catch (e) {
+    console.log("Failed to publish site event", ne.id, ne.pubkey);
+    return sendError(res, "Failed to publish to relays", 400);
+  }
+
+  // write to db after publishing
+  await prisma.sites.delete({
+    where: {
+      d_tag,
+      pubkey: admin,
+    },
+  });
+
+  sendReply(res, {
+    ok: true,
+  });
 }
 
 async function api(host, port) {
@@ -2405,6 +2565,8 @@ async function api(host, port) {
         await mutex.run(() => apiReserve(req, res, s3, prisma));
       } else if (req.url.startsWith("/deploy")) {
         await apiDeploy(req, res, s3, prisma);
+      } else if (req.url.startsWith("/delete")) {
+        await apiDelete(req, res, s3, prisma);
       } else if (req.url.startsWith("/check")) {
         await apiCheck(req, res, s3);
       } else if (req.url.startsWith("/authotp")) {
@@ -2414,7 +2576,9 @@ async function api(host, port) {
       } else if (req.url.startsWith("/otp")) {
         await apiOTP(req, res, prisma, ndk);
       } else if (req.url.startsWith("/site")) {
-        await apiSite(req, res, prisma, ndk);
+        if (req.method === "DELETE") await apiDeleteSite(req, res, prisma, ndk);
+        else await apiSite(req, res, prisma, ndk);
+      } else if (req.url.startsWith("/site")) {
       } else {
         sendError(res, "Unknown method", 400);
       }
@@ -3360,6 +3524,42 @@ async function resyncLocalDb() {
   console.log("done");
 }
 
+async function changeWebsiteUser(naddr, pubkey) {
+  await ensureAuth();
+
+  const userPubkey = (await signer.user()).pubkey;
+  console.log("userPubkey", userPubkey);
+
+  const ndk = new NDK({
+    explicitRelayUrls: [SITE_RELAY, ...OUTBOX_RELAYS],
+  });
+  ndk.connect();
+
+  const addr = parseAddr(naddr);
+  const event = new NDKEvent(ndk, await fetchNostrSite(addr));
+  console.log("naddr", naddr, "event", event);
+
+  if (event.pubkey !== userPubkey) throw new Error("Not your site");
+
+  event.tags = event.tags.filter((t) => t.length < 2 || t[0] !== "u");
+  event.tags.push(["u", pubkey]);
+  event.created_at = 0;
+
+  await event.sign(signer);
+  console.log("signed", event.rawEvent());
+
+  const relays = await fetchOutboxRelays(ndk, [pubkey]);
+  console.log("relays", relays);
+
+  const r = await event.publish(
+    NDKRelaySet.fromRelayUrls([SITE_RELAY, ...relays], ndk)
+  );
+  console.log(
+    "published to",
+    [...r].map((r) => r.url)
+  );
+}
+
 // main
 try {
   console.log(process.argv);
@@ -3400,7 +3600,9 @@ try {
         paths.push(process.argv[i]);
       }
     }
-    releaseWebsite(naddr, paths, { zip, preview, domain }).then(() => process.exit());
+    releaseWebsite(naddr, paths, { zip, preview, domain }).then(() =>
+      process.exit()
+    );
   } else if (method === "test_upload_aws") {
     uploadAWS().then(process.exit());
   } else if (method === "api") {
@@ -3497,6 +3699,10 @@ try {
   } else if (method === "update_theme") {
     const siteId = process.argv[3];
     updateTheme(siteId).then(() => process.exit());
+  } else if (method === "change_website_user") {
+    const siteId = process.argv[3];
+    const pubkey = process.argv[4];
+    changeWebsiteUser(siteId, pubkey).then(() => process.exit());
   } else if (method === "generate_otp") {
     console.log("otp", generateOTP());
   } else if (method === "test_event") {
