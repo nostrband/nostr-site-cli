@@ -2468,6 +2468,7 @@ async function apiDeleteSite(req, res, prisma, ndk) {
 
   const url = new URL(req.url, "http://localhost");
   const site = url.searchParams.get("site");
+  const id = url.searchParams.get("id");
   const relays = (url.searchParams.get("relays") || "")
     .split(",")
     .filter((r) => !!r);
@@ -2494,14 +2495,12 @@ async function apiDeleteSite(req, res, prisma, ndk) {
     kind: KIND_DELETE,
     pubkey: serverPubkey,
     content: "",
-    // NIP-09 when an 'a' tag is used, relays SHOULD delete all versions
-    // of the replaceable event *up to the created_at* timestamp of the deletion event.
-    created_at: event.created_at + 1,
     tags: [
       ["a", `${KIND_SITE}:${addr.pubkey}:${addr.identifier}`],
-      ["e", event.id],
     ],
   };
+
+  if (id) delReq.tags.push(["e", id]);
 
   // sign event
   const signer = new NDKPrivateKeySigner(key);
