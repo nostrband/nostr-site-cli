@@ -2374,7 +2374,7 @@ async function apiAuthOTP(req, res, prisma) {
 }
 
 async function apiSite(req, res, prisma, ndk) {
-  if (req.method !== "POST") return sendError("Use post", 400);
+  if (req.method !== "POST") return sendError(res, "Use post", 400);
 
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
@@ -2461,7 +2461,7 @@ async function apiSite(req, res, prisma, ndk) {
 }
 
 async function apiDeleteSite(req, res, prisma, ndk) {
-  if (req.method !== "DELETE") return sendError("Use delete", 400);
+  if (req.method !== "DELETE") return sendError(res, "Use delete", 400);
 
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
@@ -2472,7 +2472,7 @@ async function apiDeleteSite(req, res, prisma, ndk) {
     .split(",")
     .filter((r) => !!r);
 
-  if (!site) return sendError("Specify site");
+  if (!site) return sendError(res, "Specify site");
   if (!relays.length) return sendError(res, "Specify relays", 400);
 
   const key = getServerKey();
