@@ -2534,7 +2534,7 @@ async function apiDeleteSite(req, res, prisma, ndk) {
   // write to db after publishing
   await prisma.sites.delete({
     where: {
-      d_tag,
+      d_tag: addr.identifier,
       pubkey: admin,
     },
   });
