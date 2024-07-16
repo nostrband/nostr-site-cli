@@ -32,6 +32,7 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   ListObjectsV2Command,
+  DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
 import {
   CloudFrontClient,
@@ -97,6 +98,7 @@ const DEFAULT_ZAP_SPLIT =
 
 const ENGINE = "pro.npub.v1";
 
+const SITES_BUCKET = "npub.pro";
 const DOMAINS_BUCKET = "domains.npub.pro";
 
 const NPUB_PRO_API = "https://api.npubpro.com";
@@ -797,8 +799,7 @@ async function uploadAWS(dir, bucketName, domain, s3) {
 
 async function uploadWebsite(dir, domain) {
   const s3 = new S3Client({ region: AWSRegion });
-  const bucketName = "npub.pro";
-  return uploadAWS(dir, bucketName, domain, s3);
+  return uploadAWS(dir, SITES_BUCKET, domain, s3);
 }
 
 async function testAWS(domain, dir) {
@@ -2005,6 +2006,25 @@ async function apiDeploy(req, res, s3, prisma) {
   });
 }
 
+async function deleteDomainFiles(domain, s3) {
+  s3 = s3 || new S3Client({ region: AWSRegion });
+
+  const keys = await listBucketKeys(SITES_BUCKET, domain, s3);
+  while (keys.length > 0) {
+    const batch = keys.splice(0, Math.min(keys.length, 1000));
+    const cmd = new DeleteObjectsCommand({
+      Bucket: SITES_BUCKET,
+      Delete: {
+        Objects: batch.map((k) => ({ Key: k })),
+        Quiet: true,
+      },
+    });
+
+    const r = await s3.send(cmd);
+    console.log("deleted domain", domain, "batch", batch, "r", r);
+  }
+}
+
 async function apiDelete(req, res, s3, prisma) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
@@ -2055,6 +2075,9 @@ async function apiDelete(req, res, s3, prisma) {
 
   // ensure local copy of this domain
   await upsertDomainInfo(prisma, data);
+
+  // delete files
+  await deleteDomainFiles(domain, s3);
 
   // done
   sendReply(res, {
@@ -2495,9 +2518,7 @@ async function apiDeleteSite(req, res, prisma, ndk) {
     kind: KIND_DELETE,
     pubkey: serverPubkey,
     content: "",
-    tags: [
-      ["a", `${KIND_SITE}:${addr.pubkey}:${addr.identifier}`],
-    ],
+    tags: [["a", `${KIND_SITE}:${addr.pubkey}:${addr.identifier}`]],
   };
 
   if (id) delReq.tags.push(["e", id]);
@@ -3491,24 +3512,44 @@ async function testEvent() {
   console.log("r", r);
 }
 
-async function resyncLocalDb() {
-  const s3 = new S3Client({ region: AWSRegion });
-  const prisma = new PrismaClient();
-
+async function listBucketKeys(bucket, prefix, s3) {
   let keys = [];
   let token = undefined;
   do {
     const cmd = new ListObjectsV2Command({
-      Bucket: DOMAINS_BUCKET,
+      Bucket: bucket,
       MaxKeys: 1000,
+      Prefix: prefix,
       ContinuationToken: token,
     });
     const r = await s3.send(cmd);
-    console.log("r", r.KeyCount, token);
-    keys.push(...r.Contents.map((c) => c.Key));
+    console.log("list bucket ", bucket, prefix, r.KeyCount, token);
+    if (r.Contents)
+      keys.push(...r.Contents.map((c) => c.Key));
     token = r.NextContinuationToken;
   } while (token);
 
+  return keys;
+}
+
+async function resyncLocalDb() {
+  const s3 = new S3Client({ region: AWSRegion });
+  const prisma = new PrismaClient();
+
+  const keys = await listBucketKeys(DOMAINS_BUCKET, undefined, s3);
+  // let keys = [];
+  // let token = undefined;
+  // do {
+  //   const cmd = new ListObjectsV2Command({
+  //     Bucket: DOMAINS_BUCKET,
+  //     MaxKeys: 1000,
+  //     ContinuationToken: token,
+  //   });
+  //   const r = await s3.send(cmd);
+  //   console.log("r", r.KeyCount, token);
+  //   keys.push(...r.Contents.map((c) => c.Key));
+  //   token = r.NextContinuationToken;
+  // } while (token);
   console.log("keys", keys);
 
   for (const key of keys) {
@@ -3716,6 +3757,9 @@ try {
         identifier: process.argv[3],
       })
     );
+  } else if (method === "delete_domain_files") {
+    const domain = process.argv[3];
+    deleteDomainFiles(domain).then(() => process.exit());
   }
 } catch (e) {
   console.error(e);
