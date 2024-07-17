@@ -1091,17 +1091,17 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
       mode: "ssr",
       ssrIndexScriptUrl: INDEX_URL,
       maxObjects:
-        onlyPaths.length > 0 ? Math.min(onlyPaths.length * 100) : undefined,
+        onlyPaths && onlyPaths.length > 0 ? Math.min(onlyPaths.length * 100) : undefined,
     });
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
     // sitemap
     const sitemapPaths = await renderer.getSiteMap();
     const paths = sitemapPaths.filter(
-      (p) => !onlyPaths.length || onlyPaths.includes(p)
+      (p) => !onlyPaths?.length || onlyPaths?.includes(p)
     );
     console.warn("paths", paths);
-    if (paths.length < onlyPaths)
+    if (paths.length < onlyPaths?.length)
       console.warn(
         "BAD paths",
         paths,
@@ -1131,11 +1131,11 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     const rev = Date.now();
     const sw = `
     importScripts("${INDEX_URL}");
-    self.nostrSite.startSW([{ url: "${INDEX_URL}", revision: "${rev}" }, { url: "${
+    self.nostrSite.startSW({ index: "${INDEX_URL}", precacheEntries: [{ url: "${INDEX_URL}", revision: "${rev}" }, { url: "${
       renderer.settings.url
     }sw.js", revision: "${rev + 1}" }, { url: "${
       renderer.settings.url
-    }manifest.webmanifest", revision: "${rev + 2}" }]);
+    }manifest.webmanifest", revision: "${rev + 2}" }] });
   `;
     fs.writeFileSync(`${dir}/sw.js`, sw, { encoding: "utf-8" });
 
@@ -1168,7 +1168,7 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     });
 
     // nostr.json
-    fs.mkdirSync(`${dir}/.well-known`);
+    fs.mkdirSync(`${dir}/.well-known`, { recursive: true });
     const json = {
       names: {
         _: site.admin_pubkey,
