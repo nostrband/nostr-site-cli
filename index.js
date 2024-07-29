@@ -1095,6 +1095,10 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     });
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
+    // rss feed
+    const rss = await renderer.getRss();
+    fs.writeFileSync(`${dir}/feed.xml`, rss, { encoding: "utf-8" });
+
     // sitemap
     const sitemapPaths = await renderer.getSiteMap();
     const paths = sitemapPaths.filter(
