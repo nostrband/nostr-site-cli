@@ -1108,9 +1108,7 @@ async function renderWebsite(dir, naddr, onlyPathsOrLimit, preview = false) {
     // sitemap
     const sitemapPaths = await renderer.getSiteMap(limit);
     const paths = sitemapPaths.filter(
-      (p) =>
-        !onlyPaths.length ||
-        onlyPaths.includes(p)
+      (p) => !onlyPaths.length || onlyPaths.includes(p)
     );
     console.warn("paths", paths);
     if (paths.length < onlyPaths.length)
@@ -3067,101 +3065,132 @@ async function ssrWatch() {
 async function ssrRender() {
   const prisma = new PrismaClient();
 
-  while (true) {
-    const deployed = await getDeployed(prisma);
-    for (const d of deployed) {
-      const render = async (paths) => {
-        const addr = parseAddr(d.site);
-        const naddr = nip19.naddrEncode({
-          identifier: addr.identifier,
-          pubkey: addr.pubkey,
-          kind: KIND_SITE,
-          relays: [SITE_RELAY],
-        });
-        console.log("rendering", d.domain, naddr, "paths", paths.length);
-        await spawn("release_website_zip", [naddr, ...paths]);
+  const process = async (d, full = false) => {
+    const render = async (paths) => {
+      const addr = parseAddr(d.site);
+      const naddr = nip19.naddrEncode({
+        identifier: addr.identifier,
+        pubkey: addr.pubkey,
+        kind: KIND_SITE,
+        relays: [SITE_RELAY],
+      });
+      console.log("rendering", d.domain, naddr, "paths", paths.length);
+      await spawn("release_website_zip", [naddr, ...paths]);
 
-        //        await releaseWebsite(naddr, paths);
-      };
+      //        await releaseWebsite(naddr, paths);
+    };
 
-      // full rerender?
-      if (d.updated >= d.rendered) {
-        // get current last eventQueue.id,
-        // then after we're done remove all events
-        // scheduled for this site w/ id <= last_id
+    // full rerender?
+    if (full && d.updated >= d.rendered) {
+      // get current last eventQueue.id,
+      // then after we're done remove all events
+      // scheduled for this site w/ id <= last_id
 
-        const lastEvent = await prisma.eventQueue.findFirst({
+      const lastEvent = await prisma.eventQueue.findFirst({
+        where: {
+          domain: d.domain,
+        },
+        orderBy: [
+          {
+            id: "desc",
+          },
+        ],
+      });
+
+      const tm = Math.floor(Date.now() / 1000);
+
+      // full rerender
+      await render([]);
+
+      // clear event queue before this render
+      if (lastEvent) {
+        console.log(
+          "delete events queue until",
+          lastEvent.id,
+          "site",
+          d.domain
+        );
+        await prisma.eventQueue.deleteMany({
           where: {
             domain: d.domain,
+            id: {
+              lte: lastEvent.id,
+            },
           },
-          orderBy: [
-            {
-              id: "desc",
-            },
-          ],
         });
+      }
 
-        const tm = Math.floor(Date.now() / 1000);
+      // mark as rendered
+      await prisma.domain.update({
+        where: { domain: d.domain },
+        data: { rendered: tm },
+      });
+    } else {
+      // fetch events from queue
+      const events = await prisma.eventQueue.findMany({
+        where: {
+          domain: d.domain,
+        },
+      });
 
-        // full rerender
-        await render([]);
+      let lastId = 0;
+      const paths = ["/"];
+      for (const e of events) {
+        if (e.id > lastId) lastId = e.id;
+        paths.push(`/post/${e.eventId}`);
+      }
 
-        // clear event queue before this render
-        if (lastEvent) {
-          console.log(
-            "delete events queue until",
-            lastEvent.id,
-            "site",
-            d.domain
-          );
-          await prisma.eventQueue.deleteMany({
-            where: {
-              domain: d.domain,
-              id: {
-                lte: lastEvent.id,
-              },
-            },
-          });
-        }
+      if (lastId) {
+        // rerender new events
+        await render(paths);
 
-        // mark as rendered
-        await prisma.domain.update({
-          where: { domain: d.domain },
-          data: { rendered: tm },
-        });
-      } else {
-        // fetch events from queue
-        const events = await prisma.eventQueue.findMany({
+        console.log("delete events queue until", lastId, "site", d.domain);
+        await prisma.eventQueue.deleteMany({
           where: {
             domain: d.domain,
+            id: {
+              lte: lastId,
+            },
           },
         });
-
-        let lastId = 0;
-        const paths = ["/"];
-        for (const e of events) {
-          if (e.id > lastId) lastId = e.id;
-          paths.push(`/post/${e.eventId}`);
-        }
-
-        if (lastId) {
-          // rerender new events
-          await render(paths);
-
-          console.log("delete events queue until", lastId, "site", d.domain);
-          await prisma.eventQueue.deleteMany({
-            where: {
-              domain: d.domain,
-              id: {
-                lte: lastId,
-              },
-            },
-          });
-        }
       }
     }
+  };
 
-    await new Promise((ok) => setTimeout(ok, 10000));
+  while (true) {
+    const sites = await getDeployed(prisma);
+
+    // find a site for full re-render, start with oldest ones
+    const rerender = sites
+      .filter((d) => d.updated >= d.rendered)
+      .sort((a, b) => a.updated - b.updated)
+      .shift();
+
+    // find an updated site
+    const event = await prisma.eventQueue.findFirst();
+    if (event) {
+      const site = sites.find((s) => s.domain === event.domain);
+      if (site) {
+        console.log(new Date(), Date.now(), "ssr new posts", event.domain);
+        await process(site);
+      } else {
+        console.error("No site for queue event", event);
+        // must delete it otherwise we'll get stuck on it
+        await prisma.eventQueue.delete({
+          where: {
+            id: event.id,
+          },
+        });
+      }
+    } else if (rerender) {
+      // next full rerender
+      console.log(new Date(), Date.now(), "ssr rerender", rerender.domain);
+      await process(rerender, true);
+    } else {
+      // idle
+      console.log(new Date(), Date.now(), "ssr idle, sleeping");
+      await new Promise((ok) => setTimeout(ok, 3000));
+    }
   }
 }
 
@@ -3647,7 +3676,8 @@ try {
   } else if (method === "render_website") {
     const dir = process.argv[3];
     const naddr = process.argv[4];
-    const limit = process.argv.length > 5 ? parseInt(process.argv[5]) : undefined;
+    const limit =
+      process.argv.length > 5 ? parseInt(process.argv[5]) : undefined;
     renderWebsite(dir, naddr, limit).then(() => process.exit());
   } else if (method.startsWith("release_website")) {
     const naddr = process.argv[3];
@@ -3662,10 +3692,8 @@ try {
         paths.push(process.argv[i]);
       }
     }
-    console.log("was_paths", paths);
-    if (paths.length === 1 && !paths[0].startsWith('/'))
+    if (paths.length === 1 && !paths[0].startsWith("/"))
       paths = parseInt(paths[0]);
-    console.log("limit_paths", paths);
     releaseWebsite(naddr, paths, { zip, preview, domain }).then(() =>
       process.exit()
     );
