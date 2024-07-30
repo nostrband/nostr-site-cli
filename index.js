@@ -3163,7 +3163,7 @@ async function ssrRender() {
     // find a site for full re-render, start with oldest ones
     const rerender = sites
       .filter((d) => d.updated >= d.rendered)
-      .sort((a, b) => a.updated - b.updated)
+//      .sort((a, b) => a.updated - b.updated)
       .shift();
 
     // find an updated site
