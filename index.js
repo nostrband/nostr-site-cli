@@ -3653,7 +3653,7 @@ try {
     const naddr = process.argv[3];
     const zip = method.includes("zip");
     const preview = method.includes("preview");
-    const paths = [];
+    let paths = [];
     let domain = undefined;
     for (let i = 4; i < process.argv.length; i++) {
       if (process.argv[i].startsWith("domain:")) {
@@ -3662,8 +3662,10 @@ try {
         paths.push(process.argv[i]);
       }
     }
-    if (paths.length === 1 && Number.isInteger(paths[0]))
+    console.log("was_paths", paths);
+    if (paths.length === 1 && !paths[0].startsWith('/'))
       paths = parseInt(paths[0]);
+    console.log("limit_paths", paths);
     releaseWebsite(naddr, paths, { zip, preview, domain }).then(() =>
       process.exit()
     );
