@@ -3662,6 +3662,8 @@ try {
         paths.push(process.argv[i]);
       }
     }
+    if (paths.length === 1 && Number.isInteger(paths[0]))
+      paths = parseInt(paths[0]);
     releaseWebsite(naddr, paths, { zip, preview, domain }).then(() =>
       process.exit()
     );
