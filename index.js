@@ -1071,9 +1071,16 @@ function get404(naddr, site) {
 `;
 }
 
-async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
+async function renderWebsite(dir, naddr, onlyPathsOrLimit, preview = false) {
   if (dir.endsWith("/")) dir = dir.substring(0, dir.length - 1);
-  console.log("renderWebsite", dir, naddr);
+
+  const limit = onlyPathsOrLimit
+    ? Number.isInteger(onlyPathsOrLimit)
+      ? onlyPathsOrLimit
+      : onlyPathsOrLimit.length
+    : 0;
+  const onlyPaths = !limit && onlyPathsOrLimit ? onlyPathsOrLimit : [];
+  console.log("renderWebsite", dir, naddr, limit, onlyPaths);
 
   // disable debug logging
   const loggers = {
@@ -1090,8 +1097,7 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
       addr,
       mode: "ssr",
       ssrIndexScriptUrl: INDEX_URL,
-      maxObjects:
-        onlyPaths && onlyPaths.length > 0 ? Math.min(onlyPaths.length * 100) : undefined,
+      maxObjects: limit ? Math.min(limit * 100) : undefined,
     });
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
@@ -1100,12 +1106,14 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
     fs.writeFileSync(`${dir}/feed.xml`, rss, { encoding: "utf-8" });
 
     // sitemap
-    const sitemapPaths = await renderer.getSiteMap();
+    const sitemapPaths = await renderer.getSiteMap(limit);
     const paths = sitemapPaths.filter(
-      (p) => !onlyPaths?.length || onlyPaths?.includes(p)
+      (p) =>
+        !onlyPaths.length ||
+        onlyPaths.includes(p)
     );
     console.warn("paths", paths);
-    if (paths.length < onlyPaths?.length)
+    if (paths.length < onlyPaths.length)
       console.warn(
         "BAD paths",
         paths,
@@ -1115,10 +1123,13 @@ async function renderWebsite(dir, naddr, onlyPaths, preview = false) {
         sitemapPaths
       );
 
-    const sitemap = sitemapPaths
-      .map((p) => `${renderer.settings.origin}${p}`)
-      .join("\n");
-    fs.writeFileSync(`${dir}/sitemap.txt`, sitemap, { encoding: "utf-8" });
+    // only write sitemap if we've loaded the whole site
+    if (!limit) {
+      const sitemap = sitemapPaths
+        .map((p) => `${renderer.settings.origin}${p}`)
+        .join("\n");
+      fs.writeFileSync(`${dir}/sitemap.txt`, sitemap, { encoding: "utf-8" });
+    }
 
     const robots = `
   User-agent: *
@@ -1269,7 +1280,14 @@ async function releaseWebsite(
   paths,
   { preview = false, zip = false, domain = "" } = {}
 ) {
-  console.log("release", { naddr, paths: paths.length, preview, zip, domain });
+  const isLimit = Number.isInteger(paths);
+  console.log("release", {
+    naddr,
+    paths: isLimit ? paths : paths.length,
+    preview,
+    zip,
+    domain,
+  });
   const dir = "tmp_" + Date.now();
   fs.mkdirSync(dir);
   console.warn(Date.now(), "dir", dir);
@@ -1981,7 +1999,7 @@ async function apiDeploy(req, res, s3, prisma) {
     return sendError(res, "Wrong site", 400);
 
   // pre-render one page and publish
-  await spawn("release_website_zip_preview", [site, "/", "domain:" + domain]);
+  await spawn("release_website_zip_preview", [site, "20", "domain:" + domain]);
 
   // await releaseWebsite(site, ["/"], { preview: true, zip: true, domain });
 
@@ -3528,8 +3546,7 @@ async function listBucketKeys(bucket, prefix, s3) {
     });
     const r = await s3.send(cmd);
     console.log("list bucket ", bucket, prefix, r.KeyCount, token);
-    if (r.Contents)
-      keys.push(...r.Contents.map((c) => c.Key));
+    if (r.Contents) keys.push(...r.Contents.map((c) => c.Key));
     token = r.NextContinuationToken;
   } while (token);
 
@@ -3630,7 +3647,8 @@ try {
   } else if (method === "render_website") {
     const dir = process.argv[3];
     const naddr = process.argv[4];
-    renderWebsite(dir, naddr).then(() => process.exit());
+    const limit = process.argv.length > 5 ? parseInt(process.argv[5]) : undefined;
+    renderWebsite(dir, naddr, limit).then(() => process.exit());
   } else if (method.startsWith("release_website")) {
     const naddr = process.argv[3];
     const zip = method.includes("zip");
