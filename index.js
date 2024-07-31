@@ -107,11 +107,17 @@ const NPUB_PRO_DOMAIN = "npub.pro";
 const OTP_TTL = 300000; // 5 minutes
 
 const DEFAULT_BLOSSOM_SERVERS = [
+  // our server, w/ discovery enabled
+  "https://blossom.npubpro.com/",
   // doesn't return proper mime type
   // "https://cdn.satellite.earth/",
-  "https://files.v0l.io/",
-  "https://blossom.nostr.hu/",
+  // no longer accepts non-media uploads
+  //  "https://files.v0l.io/",
+  // dropped our files
+  //  "https://blossom.nostr.hu/",
+  // doesn't whitelist our pubkey :(
   "https://cdn.hzrd149.com/",
+  // doesn't whitelist our pubkey :(
   "https://media-server.slidestr.net/",
 ];
 
@@ -1101,10 +1107,6 @@ async function renderWebsite(dir, naddr, onlyPathsOrLimit, preview = false) {
     });
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
-    // rss feed
-    const rss = await renderer.getRss();
-    fs.writeFileSync(`${dir}/feed.xml`, rss, { encoding: "utf-8" });
-
     // sitemap
     const sitemapPaths = await renderer.getSiteMap(limit);
     const paths = sitemapPaths.filter(
@@ -1202,14 +1204,25 @@ async function renderWebsite(dir, naddr, onlyPathsOrLimit, preview = false) {
     });
 
     // render using hbs and replace document.html
-    for (let p of paths) {
-      const { result } = await renderer.render(p);
-      if (p === "/") p = "/index";
-      if (!p.endsWith(".html")) p += ".html";
-      const subDir = dir + path.dirname(p);
-      console.warn("result html size", subDir, p, result.length);
+    for (const p of paths) {
+      const { result, context } = await renderer.render(p);
+      let file = p;
+      if (file === "/") file = "/index";
+      if (!file.endsWith(".html")) file += ".html";
+      const subDir = dir + path.dirname(file);
+      console.warn("result html size", subDir, p, file, result.length);
       fs.mkdirSync(subDir, { recursive: true });
-      fs.writeFileSync(dir + p, result, { encoding: "utf-8" });
+      fs.writeFileSync(dir + file, result, { encoding: "utf-8" });
+
+      console.warn("context rss", p, renderer.hasRss(p), context.context);
+      if (renderer.hasRss(p)) {
+        const rssPath = p.endsWith("/") ? p + "rss/" : p + "/rss/";
+        const rssFile = file.replace(".html", ".xml");
+        console.log("rendering rss for", p, "at", rssFile);
+        const { result } = await renderer.render(rssPath);
+        console.warn("result rss size", subDir, rssPath, rssFile, result.length);
+        fs.writeFileSync(dir + rssFile, result, { encoding: "utf-8" });
+      }
     }
     console.warn("done");
 
@@ -3163,7 +3176,7 @@ async function ssrRender() {
     // find a site for full re-render, start with oldest ones
     const rerender = sites
       .filter((d) => d.updated >= d.rendered)
-//      .sort((a, b) => a.updated - b.updated)
+      .sort((a, b) => (a.updated || 0) - (b.updated || 0))
       .shift();
 
     // find an updated site
