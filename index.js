@@ -1208,6 +1208,7 @@ async function renderWebsite(dir, naddr, onlyPathsOrLimit, preview = false) {
       const { result, context } = await renderer.render(p);
       let file = p;
       if (file === "/") file = "/index";
+      else if (file.endsWith("/")) file = file.substring(0, file.length - 1);
       if (!file.endsWith(".html")) file += ".html";
       const subDir = dir + path.dirname(file);
       console.warn("result html size", subDir, p, file, result.length);
