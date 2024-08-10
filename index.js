@@ -118,7 +118,9 @@ const DEFAULT_BLOSSOM_SERVERS = [
   // doesn't whitelist our pubkey :(
   "https://cdn.hzrd149.com/",
   // doesn't whitelist our pubkey :(
-  "https://media-server.slidestr.net/",
+  //  "https://media-server.slidestr.net/",
+
+  //  "https://cdn.nostrcheck.me/",
 ];
 
 const DEFAULT_RELAYS = [
@@ -261,6 +263,7 @@ async function ensureAuth() {
 
 function makeSignEvent(pubkey) {
   return async function (draft) {
+    console.log("sign blossom auth as", pubkey);
     // add the pubkey to the draft event
     const event = { ...draft, pubkey };
     //    console.log("signing", event);
@@ -1221,7 +1224,13 @@ async function renderWebsite(dir, naddr, onlyPathsOrLimit, preview = false) {
         const rssFile = file.replace(".html", ".xml");
         console.log("rendering rss for", p, "at", rssFile);
         const { result } = await renderer.render(rssPath);
-        console.warn("result rss size", subDir, rssPath, rssFile, result.length);
+        console.warn(
+          "result rss size",
+          subDir,
+          rssPath,
+          rssFile,
+          result.length
+        );
         fs.writeFileSync(dir + rssFile, result, { encoding: "utf-8" });
       }
     }
@@ -2004,6 +2013,7 @@ async function apiDeploy(req, res, s3, prisma) {
     info.domain !== domain ||
     info.pubkey !== admin ||
     (infoAddr &&
+      info.status !== "released" &&
       (infoAddr.pubkey !== addr.pubkey ||
         infoAddr.identifier !== addr.identifier ||
         infoAddr.kind !== addr.kind))
@@ -3177,7 +3187,7 @@ async function ssrRender() {
     // find a site for full re-render, start with oldest ones
     const rerender = sites
       .filter((d) => d.updated >= d.rendered)
-      .sort((a, b) => Number(a.updated) - Number((b.updated)))
+      .sort((a, b) => Number(b.updated) - Number(a.updated))
       .shift();
 
     // find an updated site
