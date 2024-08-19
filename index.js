@@ -74,7 +74,6 @@ import { getProfileSlug } from "libnostrsite";
 import { fetchNostrSite } from "libnostrsite";
 import { fetchInboxRelays } from "libnostrsite";
 import { fetchOutboxRelays } from "libnostrsite";
-import { fetchEvent } from "libnostrsite";
 
 const AWSRegion = "eu-north-1";
 
@@ -120,7 +119,7 @@ const DEFAULT_BLOSSOM_SERVERS = [
   // doesn't whitelist our pubkey :(
   //  "https://media-server.slidestr.net/",
 
-  //  "https://cdn.nostrcheck.me/",
+  "https://cdn.nostrcheck.me/",
 ];
 
 const DEFAULT_RELAYS = [
@@ -284,10 +283,15 @@ async function checkBlossomFile({
   getAuth,
 }) {
   try {
-    const existing = await BlossomClient.getBlob(server, hash, getAuth);
-    console.log(entry, "exists", !!existing, "server", server);
-    if (existing) return true;
-  } catch {}
+    const blob = await BlossomClient.getBlob(server, hash, getAuth);
+    if (!blob) return false;
+    const blobHash = bytesToHex(sha256(new Uint8Array(await blob.arrayBuffer())));
+    const exists = blobHash === hash;
+    console.log(entry, "exists", exists, "server", server, "hash", hash, "blogHash", blobHash);
+    return exists;
+  } catch (e) {
+    console.log(e);
+  }
   return false;
 }
 
@@ -1106,7 +1110,7 @@ async function renderWebsite(dir, naddr, onlyPathsOrLimit, preview = false) {
       addr,
       mode: "ssr",
       ssrIndexScriptUrl: INDEX_URL,
-      maxObjects: limit ? Math.min(limit * 100) : undefined,
+      maxObjects: limit ? Math.min(limit, 100) : undefined,
     });
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
