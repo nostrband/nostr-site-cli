@@ -1110,7 +1110,7 @@ async function renderWebsite(dir, naddr, onlyPathsOrLimit, preview = false) {
       addr,
       mode: "ssr",
       ssrIndexScriptUrl: INDEX_URL,
-      maxObjects: limit ? Math.min(limit, 100) : undefined,
+      maxObjects: limit ? Math.max(limit, 100) : undefined,
     });
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
@@ -2044,7 +2044,8 @@ async function apiDeploy(req, res, s3, prisma) {
     console.log("old info", oldInfo);
     if (oldInfo && oldInfo.pubkey === admin) {
       const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
-      await putDomainInfo(oldInfo, "released", expires, s3);
+      const delInfo = await putDomainInfo(oldInfo, "released", expires, s3);
+      await upsertDomainInfo(prisma, delInfo);
     }
   }
 
@@ -3166,6 +3167,7 @@ async function ssrRender() {
       for (const e of events) {
         if (e.id > lastId) lastId = e.id;
         paths.push(`/post/${e.eventId}`);
+        // FIXME also author page, also hashtag page, also kind page!
       }
 
       if (lastId) {
