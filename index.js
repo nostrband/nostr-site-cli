@@ -285,9 +285,21 @@ async function checkBlossomFile({
   try {
     const blob = await BlossomClient.getBlob(server, hash, getAuth);
     if (!blob) return false;
-    const blobHash = bytesToHex(sha256(new Uint8Array(await blob.arrayBuffer())));
+    const blobHash = bytesToHex(
+      sha256(new Uint8Array(await blob.arrayBuffer()))
+    );
     const exists = blobHash === hash;
-    console.log(entry, "exists", exists, "server", server, "hash", hash, "blogHash", blobHash);
+    console.log(
+      entry,
+      "exists",
+      exists,
+      "server",
+      server,
+      "hash",
+      hash,
+      "blogHash",
+      blobHash
+    );
     return exists;
   } catch (e) {
     console.log(e);
@@ -791,9 +803,11 @@ async function uploadAWS(dir, bucketName, domain, s3) {
   });
   console.warn("files", files);
 
+  const keys = [];
   for (const f of files) {
     const content = fs.readFileSync(`${dir}/${f}`);
     const key = `${domain}/${f}`;
+    keys.push(key);
     const CacheControl = f === "index.html" ? "no-cache" : undefined;
     console.warn("uploading", f, "to", key, "cache control", CacheControl);
     const cmd = new PutObjectCommand({
@@ -808,11 +822,27 @@ async function uploadAWS(dir, bucketName, domain, s3) {
     const r = await s3.send(cmd);
     console.warn("uploaded", f, r);
   }
+
+  return keys;
 }
 
-async function uploadWebsite(dir, domain) {
+async function uploadWebsite(dir, domain, deleteOldFiles = false) {
   const s3 = new S3Client({ region: AWSRegion });
-  return uploadAWS(dir, SITES_BUCKET, domain, s3);
+
+  // full rerender?
+  const existingKeys = [];
+  if (deleteOldFiles) {
+    existingKeys.push(...(await listBucketKeys(SITES_BUCKET, domain, s3)));
+  }
+  console.log("existingKeys", existingKeys);
+
+  const keys = await uploadAWS(dir, SITES_BUCKET, domain, s3);
+  console.log("uploaded keys", keys);
+  if (deleteOldFiles) {
+    const deleteKeys = existingKeys.filter(k => !keys.includes(k));
+    console.log("deleteKeys", deleteKeys);
+    await deleteDomainFiles(domain, s3, deleteKeys);
+  }
 }
 
 async function testAWS(domain, dir) {
@@ -1330,7 +1360,8 @@ async function releaseWebsite(
       throw new Error("Unknown subdomain");
     domain = url.hostname.split(".")[0];
   }
-  await uploadWebsite(dir, domain);
+  const deleteOldFiles = !paths || (!isLimit && !paths.length);
+  await uploadWebsite(dir, domain, deleteOldFiles);
 
   //  fs.rmSync(dir, { recursive: true });
   console.warn(Date.now(), "done uploading", naddr, site.origin);
@@ -2055,10 +2086,10 @@ async function apiDeploy(req, res, s3, prisma) {
   });
 }
 
-async function deleteDomainFiles(domain, s3) {
+async function deleteDomainFiles(domain, s3, keys = undefined) {
   s3 = s3 || new S3Client({ region: AWSRegion });
 
-  const keys = await listBucketKeys(SITES_BUCKET, domain, s3);
+  keys = keys || (await listBucketKeys(SITES_BUCKET, domain, s3));
   while (keys.length > 0) {
     const batch = keys.splice(0, Math.min(keys.length, 1000));
     const cmd = new DeleteObjectsCommand({
