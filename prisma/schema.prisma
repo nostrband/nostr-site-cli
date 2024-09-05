@@ -44,3 +44,12 @@ model Sites {
 
   @@index([pubkey])
 }
+
+model Certs {
+  id        String @id
+  pubkey    String
+  domain    String
+  timestamp BigInt
+  error     String @default("")
+  @@index([domain, pubkey, error])
+}

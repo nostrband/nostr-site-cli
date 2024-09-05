@@ -10,7 +10,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-acm": "^3.637.0",
     "@aws-sdk/client-cloudfront": "^3.583.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.645.0",
     "@aws-sdk/client-s3": "^3.583.0",
     "@noble/ciphers": "^0.5.3",
     "@noble/hashes": "^1.4.0",
@@ -21,6 +23,7 @@
     "blossom-client-sdk": "^0.7.0",
     "browser-hbs": "file:../browser-hbs",
     "buffer": "^6.0.3",
+    "dns": "^0.2.2",
     "dotenv": "^16.4.5",
     "fs": "^0.0.1-security",
     "libnostrsite": "file:../libnostrsite",

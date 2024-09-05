@@ -23,6 +23,11 @@ import http from "http";
 import { PrismaClient } from "@prisma/client";
 import childProcess from "child_process";
 import archiver from "archiver";
+import {
+  ACMClient,
+  DescribeCertificateCommand,
+  RequestCertificateCommand,
+} from "@aws-sdk/client-acm"; // ES Modules import
 
 // guides https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/s3/
 import {
@@ -33,10 +38,12 @@ import {
   PutObjectCommand,
   ListObjectsV2Command,
   DeleteObjectsCommand,
+  GetBucketPolicyCommand,
 } from "@aws-sdk/client-s3";
 import {
   CloudFrontClient,
   CreateDistributionCommand,
+  ListDistributionsCommand,
 } from "@aws-sdk/client-cloudfront";
 import {
   parseAddr,
@@ -74,8 +81,15 @@ import { getProfileSlug } from "libnostrsite";
 import { fetchNostrSite } from "libnostrsite";
 import { fetchInboxRelays } from "libnostrsite";
 import { fetchOutboxRelays } from "libnostrsite";
+import dns from "dns";
+import {
+  AddListenerCertificatesCommand,
+  DescribeListenersCommand,
+  ElasticLoadBalancingV2Client,
+} from "@aws-sdk/client-elastic-load-balancing-v2";
 
 const AWSRegion = "eu-north-1";
+const AWSEdgeRegion = "us-east-1";
 
 const KIND_PROFILE = 0;
 const KIND_CONTACTS = 3;
@@ -99,6 +113,20 @@ const ENGINE = "pro.npub.v1";
 
 const SITES_BUCKET = "npub.pro";
 const DOMAINS_BUCKET = "domains.npub.pro";
+const CUSTOM_BUCKET = "custom.npub.pro";
+
+const LAMBDA_DOMAIN_TO_PATH =
+  "arn:aws:lambda:us-east-1:945458476897:function:subDomainToS3Path:13";
+const LAMBDA_HANDLE_403 =
+  "arn:aws:lambda:us-east-1:945458476897:function:subDomain403Handler:11";
+
+const CF_OAC_ID = "E36XDTETWYD652";
+const CF_CACHE_POLICY_ID = "658327ea-f89d-4fab-a63d-7e88639e58f6";
+
+const AWS_GLOBAL_ACCEL_IPS = ["75.2.103.62", "35.71.169.8"];
+
+const LB_LISTENER_ARN =
+  "arn:aws:elasticloadbalancing:us-east-1:945458476897:listener/app/TestEC2/f1119f64affd9926/de35c314bced9a29";
 
 const NPUB_PRO_API = "https://api.npubpro.com";
 const NPUB_PRO_DOMAIN = "npub.pro";
@@ -789,6 +817,19 @@ async function createWebsite(dist, naddr, dir) {
   console.log("done");
 }
 
+async function uploadS3(s3, bucket, key, content, contentType, cacheControl) {
+  const cmd = new PutObjectCommand({
+    Bucket: bucket,
+    Body: content,
+    Key: key,
+    ContentType: contentType,
+    CacheControl: cacheControl,
+    ChecksumAlgorithm: "SHA256",
+    ChecksumSHA256: Buffer.from(sha256(content)).toString("base64"),
+  });
+  return await s3.send(cmd);
+}
+
 async function uploadAWS(dir, bucketName, domain, s3) {
   // dir = dir || "tests/tony";
   // bucketName = bucketName || `test2.npub.pro`;
@@ -839,7 +880,7 @@ async function uploadWebsite(dir, domain, deleteOldFiles = false) {
   const keys = await uploadAWS(dir, SITES_BUCKET, domain, s3);
   console.log("uploaded keys", keys);
   if (deleteOldFiles) {
-    const deleteKeys = existingKeys.filter(k => !keys.includes(k));
+    const deleteKeys = existingKeys.filter((k) => !keys.includes(k));
     console.log("deleteKeys", deleteKeys);
     await deleteDomainFiles(domain, s3, deleteKeys);
   }
@@ -1986,6 +2027,25 @@ async function apiReserve(req, res, s3, prisma) {
   });
 }
 
+async function getSiteDomain(admin, addr, prisma) {
+  const sites = await prisma.domain.findMany({
+    where: {
+      pubkey: admin,
+    },
+  });
+  const site = sites.find((s) => {
+    const a = parseNaddr(s.site);
+    return (
+      a.pubkey === addr.pubkey &&
+      a.identifier === addr.identifier &&
+      a.kind === addr.kind
+    );
+  });
+  if (!site) return "";
+  console.log("Domain for site", addr, site.domain);
+  return site.domain;
+}
+
 async function apiDeploy(req, res, s3, prisma) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
@@ -2009,22 +2069,25 @@ async function apiDeploy(req, res, s3, prisma) {
     // if person changed address to external and thus domain is empty?
     // then we search for this site in our local db and redeploy there
     // to rebuild their dist.zip etc
-    const sites = await prisma.domain.findMany({
-      where: {
-        pubkey: admin,
-      },
-    });
-    const site = sites.find((s) => {
-      const a = parseNaddr(s.site);
-      return (
-        a.pubkey === addr.pubkey &&
-        a.identifier === addr.identifier &&
-        a.kind === addr.kind
-      );
-    });
-    if (!site) return sendError(res, "Site not found", 404);
-    domain = site.domain;
-    console.log("Domain for site", domain);
+    domain = await getSiteDomain(admin, addr, prisma);
+    if (!domain) return sendError(res, "Site not found", 404);
+
+    // const sites = await prisma.domain.findMany({
+    //   where: {
+    //     pubkey: admin,
+    //   },
+    // });
+    // const site = sites.find((s) => {
+    //   const a = parseNaddr(s.site);
+    //   return (
+    //     a.pubkey === addr.pubkey &&
+    //     a.identifier === addr.identifier &&
+    //     a.kind === addr.kind
+    //   );
+    // });
+    // if (!site) return sendError(res, "Site not found", 404);
+    // domain = site.domain;
+    // console.log("Domain for site", domain);
   }
 
   const info = await fetchDomainInfo(domain, s3);
@@ -2127,7 +2190,7 @@ async function apiDelete(req, res, s3, prisma) {
       a.pubkey === addr.pubkey &&
       a.identifier === addr.identifier &&
       a.kind === addr.kind &&
-      (!domain || a.domain === domain)
+      (!domain || s.domain === domain)
     );
   });
   if (!domainSite) return sendError(res, "Site not found", 404);
@@ -2201,6 +2264,393 @@ async function apiCheck(req, res, s3) {
   return sendReply(res, {
     domain,
     status: "available",
+  });
+}
+
+async function getCert(id, acm) {
+  const command = new DescribeCertificateCommand({
+    CertificateArn: id,
+  });
+
+  try {
+    const response = await acm.send(command);
+    console.log("acm cert", id, response.Certificate);
+    return response.Certificate;
+  } catch (e) {
+    console.error("getCert error", e, id);
+    return null;
+  }
+}
+
+async function waitGetCert(id, acm) {
+  for (let i = 0; i < 10; i++) {
+    const c = await getCert(id, acm);
+
+    if (c && c.Status !== "PENDING_VALIDATION") return c;
+
+    // wait for cert and for validation options to appear
+    if (
+      !c ||
+      !c.DomainValidationOptions.length ||
+      !c.DomainValidationOptions[0].ResourceRecord
+    ) {
+      await new Promise((ok) => setTimeout(ok, 1000));
+    } else {
+      return c;
+    }
+  }
+
+  // not found or validation options didn't appear
+  return null;
+}
+
+async function getCertId(domain, prisma) {
+  const rec = await prisma.certs.findFirst({
+    where: {
+      domain,
+      error: "",
+    },
+  });
+  console.log("domain cert", domain, rec);
+  return rec ? rec.id : "";
+}
+
+async function setCertError(id, error, prisma) {
+  await prisma.certs.update({
+    where: { id },
+    data: { error },
+  });
+}
+
+async function sendCert(res, domain, admin, cert) {
+  const owned = await checkOwnedDomain(domain, admin);
+  const vo =
+    cert.DomainValidationOptions && cert.DomainValidationOptions.length > 0
+      ? cert.DomainValidationOptions[0].ResourceRecord
+      : undefined;
+  const dnsValidation = [
+    {
+      type: "TXT",
+      name: "", // empty
+      value: `nostr-admin-pubkey=${admin}`,
+    },
+  ];
+  if (vo)
+    dnsValidation.push({
+      type: vo.Type,
+      name: vo.Name.split("." + domain)[0],
+      value: vo.Value,
+    });
+  let status = cert.Status;
+  if (status === "ISSUED" && !owned) status = "PENDING_ADMIN_VALIDATION";
+  return sendReply(res, {
+    domain,
+    status,
+    dnsValidation,
+  });
+}
+
+async function apiCreateCert(req, res, acm, prisma) {
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+
+  const domain = url.searchParams.get("domain").toLocaleLowerCase();
+  if (!domain) return sendError(res, "Specify domain", 400);
+  if (!domain.includes(".")) return sendError(res, "Bad domain", 400);
+
+  const alts = [domain];
+  if (domain.split(".").length === 2) alts.push(`*.${domain}`);
+
+  const id = await getCertId(domain, prisma);
+  if (id) {
+    console.log("cert already requested", domain, id);
+    const cert = await waitGetCert(id, acm);
+    console.log("existing cert", domain, cert);
+    if (cert) return sendCert(res, domain, admin, cert);
+
+    // mark old cert as failed
+    await setCertError(id, "Not found or failed", prisma);
+  }
+
+  const command = new RequestCertificateCommand({
+    // RequestCertificateRequest
+    DomainName: domain, // required
+    ValidationMethod: "DNS",
+    SubjectAlternativeNames: alts,
+    IdempotencyToken: bytesToHex(sha256(domain)).substring(0, 32), // per-domain calls are idempotent
+    Options: {
+      CertificateTransparencyLoggingPreference: "ENABLED",
+    },
+    Tags: [
+      {
+        // Tag
+        Key: "creator", // required
+        Value: admin,
+      },
+    ],
+    KeyAlgorithm: "RSA_2048",
+  });
+  console.log("acm command", command);
+
+  try {
+    const response = await acm.send(command);
+    console.log("acm response", response);
+    const id = response.CertificateArn;
+
+    const cert = await waitGetCert(id, acm);
+    if (!cert) throw new Error("Failed to wait for cert");
+
+    const data = {
+      id,
+      domain,
+      pubkey: "",
+      timestamp: Date.now(),
+      error: "",
+    };
+
+    // write to db
+    await prisma.certs.create({
+      data,
+    });
+
+    return sendCert(res, domain, admin, cert);
+  } catch (e) {
+    console.error("apiCreateCert error", e, domain, admin);
+    return sendError(res, "Failed to request cert", 500);
+  }
+}
+
+async function apiGetCert(req, res, acm, prisma) {
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+
+  const domain = url.searchParams.get("domain").toLocaleLowerCase();
+  if (!domain) return sendError(res, "Specify domain", 400);
+
+  const id = await getCertId(domain, prisma);
+  if (!id) return sendError(res, "Certificate not found", 404);
+
+  const cert = await waitGetCert(id, acm);
+  if (!cert) return sendError(res, "Failed to get cert", 500);
+
+  return sendCert(res, domain, admin, cert);
+}
+
+async function checkOwnedDomain(domain, admin) {
+  const recs = await new Promise((ok, err) => {
+    dns.resolveTxt(domain, (e, addresses) => {
+      if (e) console.warn("no txt record for", domain, e);
+      ok(addresses || []);
+    });
+  });
+  console.log("txt recs", domain, admin, recs);
+  for (const r of recs) {
+    const kv = Array.isArray(r) ? r[0] : r;
+    if (kv.trim() === `nostr-admin-pubkey=${admin}`) return true;
+  }
+  return false;
+}
+
+async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+  console.log("url", url);
+  const domain = url.searchParams.get("domain").toLocaleLowerCase();
+  const site = url.searchParams.get("site");
+
+  const addr = parseNaddr(site);
+  if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
+  if (!domain) return sendError(res, "Specify domain and site", 400);
+
+  const subdomain = await getSiteDomain(admin, addr, prisma);
+  if (!subdomain) return sendError(res, "Site not found", 404);
+
+  const certDomain = domain;
+  const certId = await getCertId(certDomain, prisma);
+  if (!certId)
+    return sendError(res, "Certificate not requested for " + certDomain, 400);
+
+  const cert = await waitGetCert(certId, acm);
+  if (!cert)
+    return sendError(res, "Certificate not found for " + certDomain, 400);
+  if (cert.Status !== "ISSUED")
+    return sendError(res, "Certificate not issued for " + certDomain, 400);
+
+  const owned = await checkOwnedDomain(domain, admin);
+  if (!owned) return sendError(res, "Domain admin mismatch", 400);
+
+  // check existing distribution for this alias
+  const aliases = [certDomain, `*.${certDomain}`];
+  const list = [];
+  let marker = "";
+  do {
+    const listResponse = await cf.send(
+      new ListDistributionsCommand({
+        Marker: marker,
+        MaxItems: 1000,
+      })
+    );
+    console.log("listResponse", listResponse.DistributionList.Items.length);
+    list.push(...listResponse.DistributionList.Items);
+    marker = listResponse.DistributionList.Marker;
+  } while (marker !== "");
+
+  let dist = list.find((d) => d.Aliases.Items.find(a => aliases.includes(a)));
+  console.log("existing dist", dist);
+
+  // create distr if not found
+  if (!dist) {
+    const ViewerCertificate = {
+      CloudFrontDefaultCertificate: false,
+      ACMCertificateArn: certId,
+      SSLSupportMethod: "sni-only",
+      MinimumProtocolVersion: "TLSv1.2_2021",
+      Certificate: certId,
+      CertificateSource: "acm",
+    };
+
+    const bucketId = `${SITES_BUCKET}.s3.${AWSRegion}.amazonaws.com`;
+    const conf = {
+      DistributionConfig: {
+        CallerReference: "" + Date.now(),
+        Comment: "",
+        Enabled: true,
+        DefaultRootObject: "",
+        HttpVersion: "http2and3",
+        DefaultCacheBehavior: {
+          TargetOriginId: bucketId,
+          CachePolicyId: CF_CACHE_POLICY_ID,
+          ViewerProtocolPolicy: "redirect-to-https",
+          Compress: true,
+          AllowedMethods: {
+            Items: ["GET", "HEAD", "OPTIONS"],
+            Quantity: 3,
+            CachedMethods: {
+              Items: ["GET", "HEAD", "OPTIONS"],
+              Quantity: 3,
+            },
+          },
+          // NOTE: not needed bcs we use CachePolicyId
+          // MinTTL: 0,
+          // MaxTTL: 31536000,
+          // DefaultTTL: 86400,
+          // ForwardedValues: {
+          //   QueryString: false,
+          //   Cookies: {
+          //     Forward: "none",
+          //   },
+          //   Headers: {
+          //     Quantity: 0,
+          //   },
+          //   QueryStringCacheKeys: {
+          //     Quantity: 0,
+          //   },
+          // },
+          LambdaFunctionAssociations: {
+            Quantity: 2,
+            Items: [
+              {
+                EventType: "viewer-request",
+                LambdaFunctionARN: LAMBDA_DOMAIN_TO_PATH,
+              },
+              {
+                EventType: "origin-response",
+                LambdaFunctionARN: LAMBDA_HANDLE_403,
+              },
+            ],
+          },
+        },
+        Aliases: {
+          Items: aliases,
+          Quantity: aliases.length,
+        },
+        ViewerCertificate,
+        Origins: {
+          Items: [
+            {
+              DomainName: bucketId,
+              Id: bucketId,
+              ConnectionAttempts: 3,
+              ConnectionTimeout: 10,
+              OriginAccessControlId: CF_OAC_ID,
+              S3OriginConfig: {
+                OriginAccessIdentity: "",
+              },
+            },
+          ],
+          Quantity: 1,
+        },
+        PriceClass: "PriceClass_All",
+      },
+    };
+    console.log("conf", JSON.stringify(conf));
+    const distResponse = await cf.send(new CreateDistributionCommand(conf));
+    console.log("new dist", distResponse);
+    dist = distResponse.Distribution;
+  }
+
+  const distDomain = dist.DomainName;
+  const arn = dist.ARN;
+
+  // update bucket policy to allow access
+  const bucketPolicy = await s3.send(
+    new GetBucketPolicyCommand({
+      Bucket: SITES_BUCKET,
+    })
+  );
+  console.log("bucketPolicy", bucketPolicy);
+  const policy = JSON.parse(bucketPolicy.Policy);
+  console.log("bucketPolicyJson", policy);
+  const arns = policy.Statement[0].Condition.StringEquals["aws:SourceArn"];
+  if (!arns.includes(arn)) arns.push(arn);
+  console.log("updated bucketPolicyJson", policy);
+
+  const bucketPolicyResponse = await s3.send(
+    new PutBucketPolicyCommand({
+      Bucket: SITES_BUCKET,
+      Policy: JSON.stringify(policy),
+    })
+  );
+  console.log("bucketPolicyResponse", bucketPolicyResponse);
+
+  // add cert to load-balancer
+  const command = new AddListenerCertificatesCommand({
+    ListenerArn: LB_LISTENER_ARN, // required
+    Certificates: [
+      // CertificateList // required
+      {
+        // Certificate
+        CertificateArn: certId
+      },
+    ],
+  });
+  const lbResponse = await lb.send(command);
+  console.log("lbResponse", lbResponse);
+
+  // map domain to subdomain
+  const mapping = {
+    domain: domain,
+    sub: subdomain,
+  };
+
+  const mappingResponse = await uploadS3(
+    s3,
+    CUSTOM_BUCKET,
+    `${domain}.json`,
+    JSON.stringify(mapping)
+  );
+  console.log("mappingResponse", mappingResponse);
+
+  return sendReply(res, {
+    cnameDomain: distDomain,
+    redirectIps: AWS_GLOBAL_ACCEL_IPS,
+    status: dist.Status
   });
 }
 
@@ -2647,6 +3097,10 @@ async function apiDeleteSite(req, res, prisma, ndk) {
 
 async function api(host, port) {
   const s3 = new S3Client({ region: AWSRegion });
+  const acm = new ACMClient({ region: AWSEdgeRegion });
+  const cf = new CloudFrontClient({ region: AWSEdgeRegion });
+  const lb = new ElasticLoadBalancingV2Client({ region: AWSEdgeRegion });
+
   const mutex = new AsyncMutex();
   const prisma = new PrismaClient();
   const ndk = new NDK({
@@ -2678,7 +3132,12 @@ async function api(host, port) {
       } else if (req.url.startsWith("/site")) {
         if (req.method === "DELETE") await apiDeleteSite(req, res, prisma, ndk);
         else await apiSite(req, res, prisma, ndk);
-      } else if (req.url.startsWith("/site")) {
+      } else if (req.url.startsWith("/cert")) {
+        if (req.method === "POST") await apiCreateCert(req, res, acm, prisma);
+        else await apiGetCert(req, res, acm, prisma);
+      } else if (req.url.startsWith("/attach")) {
+        if (req.method === "POST")
+          await apiAttachDomain(req, res, { s3, acm, cf, lb, prisma });
       } else {
         sendError(res, "Unknown method", 400);
       }
@@ -3631,7 +4090,7 @@ async function listBucketKeys(bucket, prefix, s3) {
     const cmd = new ListObjectsV2Command({
       Bucket: bucket,
       MaxKeys: 1000,
-      Prefix: prefix,
+      Prefix: prefix + "/",
       ContinuationToken: token,
     });
     const r = await s3.send(cmd);
@@ -3709,6 +4168,37 @@ async function changeWebsiteUser(naddr, pubkey) {
     "published to",
     [...r].map((r) => r.url)
   );
+}
+
+async function testDefaultIpRoute() {
+  return new Promise((ok, err) => {
+    childProcess.exec(
+      "ip route show | awk '/default/ {print $3}'",
+      (error, stdout, stderr) => {
+        if (error) {
+          // node couldn't execute the command
+          console.log(`stderr: ${stderr}`);
+          err(error);
+        } else {
+          // the *entire* stdout and stderr (buffered)
+          const ip = stdout.trim();
+          console.log(`stdout: "${ip}"`);
+          ok(ip);
+        }
+      }
+    );
+  });
+}
+
+async function testLB() {
+  const client = new ElasticLoadBalancingV2Client({ region: AWSEdgeRegion });
+  const command = new DescribeListenersCommand({
+    // LoadBalancerNames: ["TestEC2"]
+    LoadBalancerArn:
+      "arn:aws:elasticloadbalancing:us-east-1:945458476897:loadbalancer/app/TestEC2/f1119f64affd9926",
+  });
+  const response = await client.send(command);
+  console.log("response", response);
 }
 
 // main
@@ -3875,6 +4365,10 @@ try {
   } else if (method === "delete_domain_files") {
     const domain = process.argv[3];
     deleteDomainFiles(domain).then(() => process.exit());
+  } else if (method === "test_default_ip_route") {
+    testDefaultIpRoute();
+  } else if (method === "test_lb") {
+    testLB();
   }
 } catch (e) {
   console.error(e);
