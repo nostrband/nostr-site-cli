@@ -22,6 +22,8 @@ model Domain {
   fetched   BigInt @default(0) 
 
   @@index([fetched])
+  @@index([pubkey])
+  @@index([site])
 }
 
 model EventQueue {
@@ -51,5 +53,14 @@ model Certs {
   domain    String
   timestamp BigInt
   error     String @default("")
-  @@index([domain, pubkey, error])
+  @@index([domain, error])
+}
+
+model Attach {
+  id        Int  @id @default(autoincrement())
+  pubkey    String
+  domain    String
+  site      String
+  timestamp BigInt
+  @@unique([pubkey, site, domain])
 }

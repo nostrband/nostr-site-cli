@@ -2455,6 +2455,33 @@ async function checkOwnedDomain(domain, admin) {
   return false;
 }
 
+async function listDistributions(cf) {
+  const list = [];
+  let marker = "";
+  do {
+    const listResponse = await cf.send(
+      new ListDistributionsCommand({
+        Marker: marker,
+        MaxItems: 1000,
+      })
+    );
+    console.log("listResponse", listResponse.DistributionList.Items.length);
+    list.push(...listResponse.DistributionList.Items);
+    marker = listResponse.DistributionList.Marker;
+  } while (marker !== "");
+
+  return list;
+}
+
+async function getDistribution(aliases, cf) {
+  const list = await listDistributions(cf);
+  return list.find((d) => d.Aliases.Items.find((a) => aliases.includes(a)));
+}
+
+function getDomainCertAliases(certDomain) {
+  return [certDomain, `*.${certDomain}`];
+}
+
 async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
@@ -2485,23 +2512,25 @@ async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
   const owned = await checkOwnedDomain(domain, admin);
   if (!owned) return sendError(res, "Domain admin mismatch", 400);
 
-  // check existing distribution for this alias
-  const aliases = [certDomain, `*.${certDomain}`];
-  const list = [];
-  let marker = "";
-  do {
-    const listResponse = await cf.send(
-      new ListDistributionsCommand({
-        Marker: marker,
-        MaxItems: 1000,
-      })
-    );
-    console.log("listResponse", listResponse.DistributionList.Items.length);
-    list.push(...listResponse.DistributionList.Items);
-    marker = listResponse.DistributionList.Marker;
-  } while (marker !== "");
+  // const list = await listDistributions(cf);
+  // let marker = "";
+  // do {
+  //   const listResponse = await cf.send(
+  //     new ListDistributionsCommand({
+  //       Marker: marker,
+  //       MaxItems: 1000,
+  //     })
+  //   );
+  //   console.log("listResponse", listResponse.DistributionList.Items.length);
+  //   list.push(...listResponse.DistributionList.Items);
+  //   marker = listResponse.DistributionList.Marker;
+  // } while (marker !== "");
+  // let dist = list.find((d) => d.Aliases.Items.find((a) => aliases.includes(a)));
 
-  let dist = list.find((d) => d.Aliases.Items.find(a => aliases.includes(a)));
+  // check existing distribution for these aliases
+  const aliases = getDomainCertAliases(certDomain);
+  let dist = await getDistribution(aliases, cf);
+
   console.log("existing dist", dist);
 
   // create distr if not found
@@ -2595,9 +2624,6 @@ async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
     dist = distResponse.Distribution;
   }
 
-  const distDomain = dist.DomainName;
-  const arn = dist.ARN;
-
   // update bucket policy to allow access
   const bucketPolicy = await s3.send(
     new GetBucketPolicyCommand({
@@ -2607,6 +2633,7 @@ async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
   console.log("bucketPolicy", bucketPolicy);
   const policy = JSON.parse(bucketPolicy.Policy);
   console.log("bucketPolicyJson", policy);
+  const arn = dist.ARN;
   const arns = policy.Statement[0].Condition.StringEquals["aws:SourceArn"];
   if (!arns.includes(arn)) arns.push(arn);
   console.log("updated bucketPolicyJson", policy);
@@ -2626,7 +2653,7 @@ async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
       // CertificateList // required
       {
         // Certificate
-        CertificateArn: certId
+        CertificateArn: certId,
       },
     ],
   });
@@ -2647,11 +2674,78 @@ async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
   );
   console.log("mappingResponse", mappingResponse);
 
-  return sendReply(res, {
-    cnameDomain: distDomain,
-    redirectIps: AWS_GLOBAL_ACCEL_IPS,
-    status: dist.Status
+  const data = {
+    domain,
+    pubkey: admin,
+    site,
+  };
+
+  // ensure attached record
+  await prisma.attach.upsert({
+    create: { ...data, timestamp: Date.now() },
+    update: data,
+    where: { pubkey: admin, domain },
   });
+
+  // FIXME wait until CF deploys and DNS is updated
+
+  return sendReply(res, {
+    cnameDomain: dist.DomainName,
+    redirectIps: AWS_GLOBAL_ACCEL_IPS,
+    status: dist.Status,
+  });
+}
+
+async function apiGetAttachedDomains(req, res, { cf, prisma }) {
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+  console.log("url", url);
+  const domain = (url.searchParams.get("domain") || "").toLocaleLowerCase();
+  const site = url.searchParams.get("site");
+
+  const addr = parseNaddr(site);
+  if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
+
+  const subdomain = await getSiteDomain(admin, addr, prisma);
+  if (!subdomain) return sendError(res, "Site not found", 404);
+
+  const attached = await prisma.attach.findMany({
+    where: {
+      pubkey: admin,
+      site,
+      domain: domain || undefined,
+    },
+  });
+
+  if (domain) {
+    const a = attached.find((a) => a.domain === domain);
+    if (!a) return sendError(res, "Domain not found", 404);
+
+    const aliases = getDomainCertAliases(domain);
+    const dist = await getDistribution(aliases, cf);
+    console.log("dist", dist);
+    if (!dist) throw new Error("Attached CF not found!");
+
+    // FIXME check DNS is valid?
+
+    return sendReply(res, {
+      cnameDomain: dist.DomainName,
+      redirectIps: AWS_GLOBAL_ACCEL_IPS,
+      status: dist.Status,
+    });
+
+  } else {
+
+    // list of attached domains
+    return sendReply(res, {
+      domains: attached.map(a => ({
+        domain: a.domain,
+        timestamp: Number(a.timestamp)
+      }))
+    });
+  }
 }
 
 class AsyncMutex {
@@ -3138,6 +3232,7 @@ async function api(host, port) {
       } else if (req.url.startsWith("/attach")) {
         if (req.method === "POST")
           await apiAttachDomain(req, res, { s3, acm, cf, lb, prisma });
+        else await apiGetAttachedDomains(req, res, { cf, prisma });
       } else {
         sendError(res, "Unknown method", 400);
       }
