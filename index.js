@@ -116,7 +116,7 @@ const DOMAINS_BUCKET = "domains.npub.pro";
 const CUSTOM_BUCKET = "custom.npub.pro";
 
 const LAMBDA_DOMAIN_TO_PATH =
-  "arn:aws:lambda:us-east-1:945458476897:function:subDomainToS3Path:13";
+  "arn:aws:lambda:us-east-1:945458476897:function:subDomainToS3Path:15";
 const LAMBDA_HANDLE_403 =
   "arn:aws:lambda:us-east-1:945458476897:function:subDomain403Handler:11";
 
@@ -146,10 +146,9 @@ const DEFAULT_BLOSSOM_SERVERS = [
   // dropped our files
   //  "https://blossom.nostr.hu/",
   // doesn't whitelist our pubkey :(
-//  "https://cdn.hzrd149.com/",
+  //  "https://cdn.hzrd149.com/",
   // doesn't whitelist our pubkey :(
   //  "https://media-server.slidestr.net/",
-
 ];
 
 const DEFAULT_RELAYS = [
@@ -344,7 +343,7 @@ async function uploadBlossomFile({
   file,
   mime,
   uploadAuth,
-  hash
+  hash,
 }) {
   console.log(entry, "uploading to", server, mime);
   try {
@@ -359,8 +358,16 @@ async function uploadBlossomFile({
 
     const reply = await res.json();
     console.log(entry, "upload reply", reply);
-    if (reply.sha256 !== hash) console.log(entry, "failed to upload to", server, "wrong reply hash", reply.sha256);
-    else if (!reply.url) console.log(entry, "failed to upload to", server, reply);
+    if (reply.sha256 !== hash)
+      console.log(
+        entry,
+        "failed to upload to",
+        server,
+        "wrong reply hash",
+        reply.sha256
+      );
+    else if (!reply.url)
+      console.log(entry, "failed to upload to", server, reply);
     else return true;
   } catch {
     console.log(entry, "failed to upload to", server);
@@ -626,7 +633,7 @@ async function publishTheme(
           file,
           mime,
           uploadAuth,
-          hash
+          hash,
         });
       }
 
@@ -2695,7 +2702,7 @@ async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
   // FIXME wait until CF deploys and DNS is updated
 
   return sendReply(res, {
-    cnameDomain: dist.DomainName,
+    cnameDomain: dist.DomainName + ".",
     redirectIps: AWS_GLOBAL_ACCEL_IPS,
     status: dist.Status,
   });
@@ -2736,19 +2743,17 @@ async function apiGetAttachedDomains(req, res, { cf, prisma }) {
     // FIXME check DNS is valid?
 
     return sendReply(res, {
-      cnameDomain: dist.DomainName,
+      cnameDomain: dist.DomainName + ".",
       redirectIps: AWS_GLOBAL_ACCEL_IPS,
       status: dist.Status,
     });
-
   } else {
-
     // list of attached domains
     return sendReply(res, {
-      domains: attached.map(a => ({
+      domains: attached.map((a) => ({
         domain: a.domain,
-        timestamp: Number(a.timestamp)
-      }))
+        timestamp: Number(a.timestamp),
+      })),
     });
   }
 }
