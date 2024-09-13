@@ -134,6 +134,9 @@ const NPUB_PRO_DOMAIN = "npub.pro";
 const OTP_TTL = 300000; // 5 minutes
 
 const DEFAULT_BLOSSOM_SERVERS = [
+  // trying it as default server
+  "https://cdn.nostrcheck.me/",
+
   // our server, w/ discovery enabled
   "https://blossom.npubpro.com/",
   // doesn't return proper mime type
@@ -143,11 +146,10 @@ const DEFAULT_BLOSSOM_SERVERS = [
   // dropped our files
   //  "https://blossom.nostr.hu/",
   // doesn't whitelist our pubkey :(
-  "https://cdn.hzrd149.com/",
+//  "https://cdn.hzrd149.com/",
   // doesn't whitelist our pubkey :(
   //  "https://media-server.slidestr.net/",
 
-  "https://cdn.nostrcheck.me/",
 ];
 
 const DEFAULT_RELAYS = [
@@ -325,7 +327,7 @@ async function checkBlossomFile({
       server,
       "hash",
       hash,
-      "blogHash",
+      "blobHash",
       blobHash
     );
     return exists;
@@ -342,6 +344,7 @@ async function uploadBlossomFile({
   file,
   mime,
   uploadAuth,
+  hash
 }) {
   console.log(entry, "uploading to", server, mime);
   try {
@@ -356,8 +359,9 @@ async function uploadBlossomFile({
 
     const reply = await res.json();
     console.log(entry, "upload reply", reply);
-    if (reply.url) return true;
-    else console.log(entry, "failed to upload to", server, reply);
+    if (reply.sha256 !== hash) console.log(entry, "failed to upload to", server, "wrong reply hash", reply.sha256);
+    else if (!reply.url) console.log(entry, "failed to upload to", server, reply);
+    else return true;
   } catch {
     console.log(entry, "failed to upload to", server);
   }
@@ -622,6 +626,7 @@ async function publishTheme(
           file,
           mime,
           uploadAuth,
+          hash
         });
       }
 
@@ -2684,7 +2689,7 @@ async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
   await prisma.attach.upsert({
     create: { ...data, timestamp: Date.now() },
     update: data,
-    where: { pubkey: admin, domain },
+    where: { pubkey_site_domain: { pubkey: admin, site, domain } },
   });
 
   // FIXME wait until CF deploys and DNS is updated
