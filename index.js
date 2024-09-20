@@ -87,6 +87,7 @@ import {
   DescribeListenersCommand,
   ElasticLoadBalancingV2Client,
 } from "@aws-sdk/client-elastic-load-balancing-v2";
+import { stdout } from "process";
 
 const AWSRegion = "eu-north-1";
 const AWSEdgeRegion = "us-east-1";
@@ -358,7 +359,7 @@ async function uploadBlossomFile({
 
     const reply = await res.json();
     console.log(entry, "upload reply", reply);
-    if (reply.sha256 !== hash)
+    if (reply.sha256 !== hash || reply.type !== mime)
       console.log(
         entry,
         "failed to upload to",
@@ -369,8 +370,8 @@ async function uploadBlossomFile({
     else if (!reply.url)
       console.log(entry, "failed to upload to", server, reply);
     else return true;
-  } catch {
-    console.log(entry, "failed to upload to", server);
+  } catch (e) {
+    console.log(entry, "failed to upload to", server, e);
   }
   return false;
 }
@@ -1954,6 +1955,13 @@ async function reserve(
     ) {
       // all ok, this domain was released by this pubkey
       console.log("Released by pubkey", domain, info.pubkey);
+    } else if (
+      info.domain === domain &&
+      info.status === "released" &&
+      info.expires < Date.now()
+    ) {
+      // all ok, this domain was released long ago by other pubkey
+      console.log("Released and expired", domain, info.pubkey);
     } else {
       // choose another domain for this site
       console.log(
@@ -2452,13 +2460,49 @@ async function apiGetCert(req, res, acm, prisma) {
   return sendCert(res, domain, admin, cert);
 }
 
-async function checkOwnedDomain(domain, admin) {
-  const recs = await new Promise((ok, err) => {
-    dns.resolveTxt(domain, (e, addresses) => {
-      if (e) console.warn("no txt record for", domain, e);
-      ok(addresses || []);
+async function dnsResolveNoCache(domain, type) {
+  // validate! otherwise we'll get f-ed by a code injection
+  const rx =
+    /^((?!-))(xn--)?[a-z0-9][a-z0-9-_]{0,61}[a-z0-9]{0,1}\.(xn--)?([a-z0-9\-]{1,61}|[a-z0-9-]{1,30}\.[a-z]{2,})$/;
+  const types = ["TXT", "A", "CNAME"];
+  if (!domain.match(rx)) throw new Error("Invalid domain");
+  if (!types.includes(type)) throw new Error("Invalid dns type");
+
+  return new Promise((ok, err) => {
+    const cmd = `dig ${domain} ${type} +trace | grep ${type} | awk 'BEGIN{FS="\t"}{print $NF}'`;
+    console.log(`exec cmd "${cmd}"`);
+    childProcess.exec(cmd, (e, stdout, stderr) => {
+      if (e) {
+        console.log("dns error", domain, type, e, stderr);
+        err(e);
+        return;
+      } else {
+        console.log("dns", domain, type, `"${stdout}"`);
+        const recs = stdout
+          .split("\n")
+          .map((s) => s.trim())
+          .filter((s) => !s.startsWith(";"))
+          .map((s) => {
+            if (s.startsWith('"') && s.endsWith('"'))
+              return s.substring(1, s.length - 1);
+            else return s;
+          })
+          .filter((s) => !!s);
+        console.log("recs", recs);
+        ok(recs);
+      }
     });
   });
+}
+
+async function checkOwnedDomain(domain, admin) {
+  // const recs = await new Promise((ok, err) => {
+  //   dns.resolveTxt(domain, (e, addresses) => {
+  //     if (e) console.warn("no txt record for", domain, e);
+  //     ok(addresses || []);
+  //   });
+  // });
+  const recs = await dnsResolveNoCache(domain, "TXT");
   console.log("txt recs", domain, admin, recs);
   for (const r of recs) {
     const kv = Array.isArray(r) ? r[0] : r;
@@ -4474,6 +4518,10 @@ try {
     testDefaultIpRoute();
   } else if (method === "test_lb") {
     testLB();
+  } else if (method === "dns_nocache") {
+    const domain = process.argv[3];
+    const type = process.argv[4];
+    dnsResolveNoCache(domain, type);
   }
 } catch (e) {
   console.error(e);
