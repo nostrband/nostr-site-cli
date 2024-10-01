@@ -2277,7 +2277,7 @@ async function apiCheck(req, res, s3) {
       infoAddr.identifier !== addr.identifier ||
       infoAddr.kind !== addr.kind
     ) {
-      return sendError(res, "Not available", 400);
+      return sendError(res, "Not available", 409);
     }
   }
 
@@ -2344,6 +2344,7 @@ async function setCertError(id, error, prisma) {
 
 async function sendCert(res, domain, admin, cert) {
   const owned = await checkOwnedDomain(domain, admin);
+  console.log("owned", owned, domain, admin);
   const vo =
     cert.DomainValidationOptions && cert.DomainValidationOptions.length > 0
       ? cert.DomainValidationOptions[0].ResourceRecord
@@ -2351,8 +2352,8 @@ async function sendCert(res, domain, admin, cert) {
   const dnsValidation = [
     {
       type: "TXT",
-      name: "", // empty
-      value: `nostr-admin-pubkey=${admin}`,
+      name: `_nostr-admin-pubkey`,
+      value: `${admin}`,
     },
   ];
   if (vo)
@@ -2380,8 +2381,8 @@ async function apiCreateCert(req, res, acm, prisma) {
   if (!domain) return sendError(res, "Specify domain", 400);
   if (!domain.includes(".")) return sendError(res, "Bad domain", 400);
 
-  const alts = [domain];
-  if (domain.split(".").length === 2) alts.push(`*.${domain}`);
+  const alts = [domain, `*.${domain}`];
+  // if (domain.split(".").length === 2) alts.push(`*.${domain}`);
 
   const id = await getCertId(domain, prisma);
   if (id) {
@@ -2462,14 +2463,16 @@ async function apiGetCert(req, res, acm, prisma) {
 
 async function dnsResolveNoCache(domain, type) {
   // validate! otherwise we'll get f-ed by a code injection
+  // https://stackoverflow.com/a/26987741
   const rx =
-    /^((?!-))(xn--)?[a-z0-9][a-z0-9-_]{0,61}[a-z0-9]{0,1}\.(xn--)?([a-z0-9\-]{1,61}|[a-z0-9-]{1,30}\.[a-z]{2,})$/;
+    /^(((?!-))(xn--|_)?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,})$/;
+
   const types = ["TXT", "A", "CNAME"];
   if (!domain.match(rx)) throw new Error("Invalid domain");
   if (!types.includes(type)) throw new Error("Invalid dns type");
 
   return new Promise((ok, err) => {
-    const cmd = `dig ${domain} ${type} +trace | grep ${type} | awk 'BEGIN{FS="\t"}{print $NF}'`;
+    const cmd = `dig ${domain} ${type} +trace | grep ${type} | awk '{print $NF}'`;
     console.log(`exec cmd "${cmd}"`);
     childProcess.exec(cmd, (e, stdout, stderr) => {
       if (e) {
@@ -2502,12 +2505,21 @@ async function checkOwnedDomain(domain, admin) {
   //     ok(addresses || []);
   //   });
   // });
-  const recs = await dnsResolveNoCache(domain, "TXT");
-  console.log("txt recs", domain, admin, recs);
-  for (const r of recs) {
+  const oldRecs = await dnsResolveNoCache(domain, "TXT");
+  console.log("txt recs old", domain, admin, oldRecs);
+  // NOTE: deprecated
+  for (const r of oldRecs) {
     const kv = Array.isArray(r) ? r[0] : r;
     if (kv.trim() === `nostr-admin-pubkey=${admin}`) return true;
   }
+
+  const recs = await dnsResolveNoCache(`_nostr-admin-pubkey.${domain}`, "TXT");
+  console.log("txt recs", domain, admin, recs);
+  for (const r of recs) {
+    const kv = Array.isArray(r) ? r[0] : r;
+    if (kv.trim() === admin) return true;
+  }
+
   return false;
 }
 
@@ -3743,7 +3755,11 @@ async function ssrRender() {
         relays: [SITE_RELAY],
       });
       console.log("rendering", d.domain, naddr, "paths", paths.length);
-      await spawn("release_website_zip", [naddr, ...paths]);
+      await spawn("release_website_zip", [
+        naddr,
+        "domain:" + d.domain,
+        ...paths,
+      ]);
 
       //        await releaseWebsite(naddr, paths);
     };
