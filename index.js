@@ -123,6 +123,7 @@ const LAMBDA_HANDLE_403 =
 
 const CF_OAC_ID = "E36XDTETWYD652";
 const CF_CACHE_POLICY_ID = "658327ea-f89d-4fab-a63d-7e88639e58f6";
+const CF_RESPONSE_HEADER_POLICY_ID = "5cc3b908-e619-4b99-88e5-2cf7f45965bd";
 
 const AWS_GLOBAL_ACCEL_IPS = ["75.2.103.62", "35.71.169.8"];
 
@@ -2624,6 +2625,7 @@ async function apiAttachDomain(req, res, { s3, acm, cf, lb, prisma }) {
         DefaultCacheBehavior: {
           TargetOriginId: bucketId,
           CachePolicyId: CF_CACHE_POLICY_ID,
+          ResponseHeadersPolicyId: CF_RESPONSE_HEADER_POLICY_ID,
           ViewerProtocolPolicy: "redirect-to-https",
           Compress: true,
           AllowedMethods: {
