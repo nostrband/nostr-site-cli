@@ -117,7 +117,7 @@ const DOMAINS_BUCKET = "domains.npub.pro";
 const CUSTOM_BUCKET = "custom.npub.pro";
 
 const LAMBDA_DOMAIN_TO_PATH =
-  "arn:aws:lambda:us-east-1:945458476897:function:subDomainToS3Path:15";
+  "arn:aws:lambda:us-east-1:945458476897:function:subDomainToS3Path:16";
 const LAMBDA_HANDLE_403 =
   "arn:aws:lambda:us-east-1:945458476897:function:subDomain403Handler:11";
 
@@ -2051,6 +2051,7 @@ async function getSiteDomain(admin, addr, prisma) {
   const sites = await prisma.domain.findMany({
     where: {
       pubkey: admin,
+      status: "deployed",
     },
   });
   const site = sites.find((s) => {
@@ -4177,12 +4178,13 @@ async function updateTheme(siteId) {
   );
 
   const a = tv(pkg, "a");
+  const aTag = parseATag(a);
   console.log("current theme package", pkg.id, "theme", a);
   const theme = await ndk.fetchEvent(
     {
-      kinds: [parseInt(a.split(":")[0])],
-      authors: [a.split(":")[1]],
-      "#d": [a.split(":")[2]],
+      kinds: [aTag.kind],
+      authors: [aTag.pubkey],
+      "#d": [aTag.identifier],
     },
     { groupable: false },
     NDKRelaySet.fromRelayUrls([SITE_RELAY], ndk)
