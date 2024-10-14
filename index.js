@@ -3403,7 +3403,7 @@ async function api(host, port) {
 }
 
 async function fetchRelayFilterSince(ndk, relays, f, since, abortPromises) {
-  console.log("fetch since", since, relay);
+  console.log("fetch since", since, relays);
   let until = undefined;
   let queue = [];
   do {
@@ -3422,7 +3422,7 @@ async function fetchRelayFilterSince(ndk, relays, f, since, abortPromises) {
     ]);
 
     if (!events) {
-      console.log("aborted", relay);
+      console.log("aborted", relays);
       break;
     }
 
@@ -3436,7 +3436,7 @@ async function fetchRelayFilterSince(ndk, relays, f, since, abortPromises) {
       "got",
       events.size,
       "relay",
-      relay
+      relays
     );
 
     let newUntil = undefined;
@@ -3518,6 +3518,8 @@ class EventSync {
   }
 
   addSite(naddr, site, wasSite, fetched) {
+    console.log("eventSync add site", naddr, site, wasSite, fetched);
+
     // remove old contributors
     if (wasSite) {
       for (const p of this.contributors(wasSite)) {
@@ -3683,7 +3685,7 @@ async function ssrWatch() {
   while (true) {
     // list of deployed sites, all the rest are ignored
     const deployed = await getDeployed(prisma);
-    console.log("deployed", deployed);
+    console.log("deployed", deployed.length);
 
     const getDomain = (addr) => {
       return deployed.find(
@@ -3703,7 +3705,7 @@ async function ssrWatch() {
       { kinds: [KIND_SITE] },
       last_site_tm,
       // timeout
-      [new Promise((ok) => setTimeout(ok, 5000))]
+      [new Promise((ok) => setTimeout(ok, 30000))]
     );
     last_site_tm = Math.floor(Date.now() / 1000) - SYNC_BUFFER_SEC;
 
