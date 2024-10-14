@@ -55,6 +55,7 @@ import {
   prepareSite,
   prepareSiteByContent,
   toRGBString,
+  KIND_PINNED_TO_SITE,
 } from "libnostrsite";
 
 import fs from "fs";
@@ -81,16 +82,18 @@ import { getProfileSlug } from "libnostrsite";
 import { fetchNostrSite } from "libnostrsite";
 import { fetchInboxRelays } from "libnostrsite";
 import { fetchOutboxRelays } from "libnostrsite";
-import dns from "dns";
 import {
   AddListenerCertificatesCommand,
   DescribeListenersCommand,
   ElasticLoadBalancingV2Client,
 } from "@aws-sdk/client-elastic-load-balancing-v2";
-import { stdout } from "process";
 
 const AWSRegion = "eu-north-1";
 const AWSEdgeRegion = "us-east-1";
+
+const STATUS_DEPLOYED = "deployed";
+const STATUS_RESERVED = "reserved";
+const STATUS_RELEASED = "released";
 
 const KIND_PROFILE = 0;
 const KIND_CONTACTS = 3;
@@ -167,13 +170,15 @@ const OUTBOX_RELAYS = [
 
 const BLACKLISTED_RELAYS = [
   // doesn't return EOSE, always have to wait for timeout
-  "wss://nostr.mutinywallet.com/",
-  "wss://brb.io/",
+  "wss://nostr.mutinywallet.com",
+  "wss://brb.io",
+  "wss://relay.current.fyi",
 ];
 
 const BROADCAST_RELAYS = ["wss://nostr.mutinywallet.com/"];
 
 const SITE_RELAY = "wss://relay.npubpro.com";
+const SITE_RELAYS = [SITE_RELAY, "wss://relay.nostr.band/all"];
 
 const INDEX_URL = "https://cdn.npubpro.com/index.js";
 
@@ -1861,7 +1866,7 @@ async function putDomainInfo(info, status, expires, s3) {
   };
 
   let key = getDomainKey(data.domain);
-  if (status === "reserved") key = getReservedKey(key);
+  if (status === STATUS_RESERVED) key = getReservedKey(key);
 
   const content = JSON.stringify(data);
   const cs = Buffer.from(sha256(content)).toString("base64");
@@ -1913,6 +1918,57 @@ function parseSession(req) {
   return data.pubkey;
 }
 
+function canReserve(domain, admin, addr, info) {
+  const infoAddr = parseNaddr(info.site);
+  if (
+    info.domain === domain &&
+    info.pubkey === admin &&
+    infoAddr &&
+    addr &&
+    infoAddr.pubkey === addr.pubkey &&
+    infoAddr.kind === addr.kind &&
+    infoAddr.identifier === addr.identifier
+  ) {
+    // all ok, already assigned to same site
+    console.log("Already assigned", domain, site);
+    return true;
+  } else if (
+    info.domain === domain &&
+    info.pubkey === admin &&
+    info.status === STATUS_RESERVED &&
+    !infoAddr
+  ) {
+    // all ok, we reserved this domain for this pubkey
+    console.log("Already reserved to pubkey", domain, info.pubkey);
+    return true;
+  } else if (
+    info.domain === domain &&
+    info.pubkey === admin &&
+    info.status === "released"
+  ) {
+    // all ok, this domain was released by this pubkey
+    console.log("Released by pubkey", domain, info.pubkey);
+    return true;
+  } else if (
+    info.domain === domain &&
+    info.status === "released" &&
+    info.expires < Date.now()
+  ) {
+    // all ok, this domain was released long ago by other pubkey
+    console.log("Released and expired", domain, info.pubkey);
+    return true;
+  } else {
+    // choose another domain for this site
+    console.log(
+      "Can't reserve, already assigned",
+      domain,
+      "pubkey",
+      info.pubkey
+    );
+    return false;
+  }
+}
+
 async function reserve(
   site,
   admin,
@@ -1929,49 +1985,50 @@ async function reserve(
   console.log("existing info", info);
 
   if (info) {
-    const infoAddr = parseNaddr(info.site);
-    if (
-      info.domain === domain &&
-      info.pubkey === admin &&
-      infoAddr &&
-      addr &&
-      infoAddr.pubkey === addr.pubkey &&
-      infoAddr.kind === addr.kind &&
-      infoAddr.identifier === addr.identifier
-    ) {
-      // all ok, already assigned to same site
-      console.log("Already assigned", domain, site);
-    } else if (
-      info.domain === domain &&
-      info.pubkey === admin &&
-      info.status === "reserved" &&
-      !infoAddr
-    ) {
-      // all ok, we reserved this domain for this pubkey
-      console.log("Already reserved to pubkey", domain, info.pubkey);
-    } else if (
-      info.domain === domain &&
-      info.pubkey === admin &&
-      info.status === "released"
-    ) {
-      // all ok, this domain was released by this pubkey
-      console.log("Released by pubkey", domain, info.pubkey);
-    } else if (
-      info.domain === domain &&
-      info.status === "released" &&
-      info.expires < Date.now()
-    ) {
-      // all ok, this domain was released long ago by other pubkey
-      console.log("Released and expired", domain, info.pubkey);
-    } else {
-      // choose another domain for this site
-      console.log(
-        "Failed to reserve, already assigned",
-        domain,
-        "pubkey",
-        info.pubkey
-      );
+    const available = canReserve(domain, admin, addr, info);
 
+    // if (
+    //   info.domain === domain &&
+    //   info.pubkey === admin &&
+    //   infoAddr &&
+    //   addr &&
+    //   infoAddr.pubkey === addr.pubkey &&
+    //   infoAddr.kind === addr.kind &&
+    //   infoAddr.identifier === addr.identifier
+    // ) {
+    //   // all ok, already assigned to same site
+    //   console.log("Already assigned", domain, site);
+    // } else if (
+    //   info.domain === domain &&
+    //   info.pubkey === admin &&
+    //   info.status === "reserved" &&
+    //   !infoAddr
+    // ) {
+    //   // all ok, we reserved this domain for this pubkey
+    //   console.log("Already reserved to pubkey", domain, info.pubkey);
+    // } else if (
+    //   info.domain === domain &&
+    //   info.pubkey === admin &&
+    //   info.status === "released"
+    // ) {
+    //   // all ok, this domain was released by this pubkey
+    //   console.log("Released by pubkey", domain, info.pubkey);
+    // } else if (
+    //   info.domain === domain &&
+    //   info.status === "released" &&
+    //   info.expires < Date.now()
+    // ) {
+    //   // all ok, this domain was released long ago by other pubkey
+    //   console.log("Released and expired", domain, info.pubkey);
+    // } else {
+    //   // choose another domain for this site
+    //   console.log(
+    //     "Failed to reserve, already assigned",
+    //     domain,
+    //     "pubkey",
+    //     info.pubkey
+    //   );
+    if (!available) {
       if (!noRetry) {
         // try 3 times to append XX number
         for (let i = 0; i < 3; i++) {
@@ -1982,14 +2039,17 @@ async function reserve(
           if (!info) break;
         }
       }
+
+      // could be reset after retries above
       if (info) throw new Error("Failed to assign domain");
     }
   }
 
+  // not yet reserved for us?
   if (!info) {
     const data = await putDomainInfo(
       { domain, site, pubkey: admin },
-      "reserved",
+      STATUS_RESERVED,
       expires,
       s3
     );
@@ -2052,7 +2112,7 @@ async function getSiteDomain(admin, addr, prisma) {
   const sites = await prisma.domain.findMany({
     where: {
       pubkey: admin,
-      status: "deployed",
+      status: STATUS_DEPLOYED,
     },
   });
   const site = sites.find((s) => {
@@ -2068,6 +2128,14 @@ async function getSiteDomain(admin, addr, prisma) {
   return site.domain;
 }
 
+/**
+ *
+ * @param {*} site* - site addr to be (re-)deployed
+ * @param {*} domain - chosen domain, can be omitted for re-deploy
+ * @param {*} from - optional domain to release if admin is the same
+ * @returns
+ */
+
 async function apiDeploy(req, res, s3, prisma) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
@@ -2079,12 +2147,12 @@ async function apiDeploy(req, res, s3, prisma) {
   // const autoReserve = url.searchParams.get("reserver") === "true";
   const from = url.searchParams.get("from");
 
+  if (!site) return sendError(res, "Specify site", 400);
+
   const addr = parseNaddr(site);
   if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
 
   if (domain) {
-    if (!domain || !site) return sendError(res, "Specify domain and site", 400);
-
     if (!isValidDomain(domain))
       return sendError(res, "Bad domain '" + domain + "'", 400);
   } else {
@@ -2093,51 +2161,26 @@ async function apiDeploy(req, res, s3, prisma) {
     // to rebuild their dist.zip etc
     domain = await getSiteDomain(admin, addr, prisma);
     if (!domain) return sendError(res, "Site not found", 404);
-
-    // const sites = await prisma.domain.findMany({
-    //   where: {
-    //     pubkey: admin,
-    //   },
-    // });
-    // const site = sites.find((s) => {
-    //   const a = parseNaddr(s.site);
-    //   return (
-    //     a.pubkey === addr.pubkey &&
-    //     a.identifier === addr.identifier &&
-    //     a.kind === addr.kind
-    //   );
-    // });
-    // if (!site) return sendError(res, "Site not found", 404);
-    // domain = site.domain;
-    // console.log("Domain for site", domain);
   }
 
+  // must be reserved before deploy
   const info = await fetchDomainInfo(domain, s3);
   if (!info) {
-    // if (!autoReserve)
     return sendError(res, "Domain not reserved", 400);
-
-    // console.log("auto-reserving", domain, "for", admin, "site", site);
-    // const expires = Date.now() + 60000; // 5 minutes
-    // await reserve(site, admin, domain, expires, s3, prisma, true);
-    // info = {
-    //   site,
-    //   domain,
-    //   pubkey: admin
-    // }
   }
 
   // must be already reserved for this website
-  const infoAddr = parseNaddr(info.site);
-  if (
-    info.domain !== domain ||
-    info.pubkey !== admin ||
-    (infoAddr &&
-      info.status !== "released" &&
-      (infoAddr.pubkey !== addr.pubkey ||
-        infoAddr.identifier !== addr.identifier ||
-        infoAddr.kind !== addr.kind))
-  )
+  // const infoAddr = parseNaddr(info.site);
+  // if (
+  //   info.domain !== domain ||
+  //   info.pubkey !== admin ||
+  //   (infoAddr &&
+  //     info.status !== "released" &&
+  //     (infoAddr.pubkey !== addr.pubkey ||
+  //       infoAddr.identifier !== addr.identifier ||
+  //       infoAddr.kind !== addr.kind))
+  // )
+  if (!canReserve(domain, admin, addr, info))
     return sendError(res, "Wrong site", 400);
 
   // pre-render one page and publish
@@ -2149,7 +2192,7 @@ async function apiDeploy(req, res, s3, prisma) {
   info.site = site;
 
   const expires = 0;
-  const data = await putDomainInfo(info, "deployed", expires, s3);
+  const data = await putDomainInfo(info, STATUS_DEPLOYED, expires, s3);
 
   // ensure local copy of this domain
   await upsertDomainInfo(prisma, data);
@@ -2159,16 +2202,37 @@ async function apiDeploy(req, res, s3, prisma) {
     const oldInfo = await fetchDomainInfo(from, s3);
     console.log("old info", oldInfo);
     if (oldInfo && oldInfo.pubkey === admin) {
-      const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
-      const delInfo = await putDomainInfo(oldInfo, "released", expires, s3);
-      await upsertDomainInfo(prisma, delInfo);
+      // delete the old deployment
+      await deleteSite(oldInfo, s3, prisma);
+
+      // const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+      // // mark as released on aws
+      // const delInfo = await putDomainInfo(oldInfo, STATUS_RELEASED, expires, s3);
+
+      // // update locally
+      // await upsertDomainInfo(prisma, delInfo);
+
+      // // delete files
+      // await deleteDomainFiles(delInfo.domain, s3);
     }
   }
 
   sendReply(res, {
-    status: "deployed",
+    status: STATUS_DEPLOYED,
     expires,
   });
+}
+
+async function deleteSite(info, s3, prisma) {
+  // mark as released for several days
+  const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  const data = await putDomainInfo(info, STATUS_RELEASED, expires, s3);
+
+  // ensure local copy of this domain
+  await upsertDomainInfo(prisma, data);
+
+  // delete files
+  await deleteDomainFiles(data.domain, s3);
 }
 
 async function deleteDomainFiles(domain, s3, keys = undefined) {
@@ -2190,6 +2254,22 @@ async function deleteDomainFiles(domain, s3, keys = undefined) {
   }
 }
 
+function isOwner(domain, admin, addr, info) {
+  const infoAddr = parseNaddr(info.site);
+  if (
+    // same domain, owner and siteId
+    info.domain === domain &&
+    info.pubkey === admin &&
+    infoAddr &&
+    infoAddr.pubkey === addr.pubkey &&
+    infoAddr.identifier === addr.identifier &&
+    infoAddr.kind === addr.kind
+  )
+    return true;
+
+  return false;
+}
+
 async function apiDelete(req, res, s3, prisma) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
@@ -2201,6 +2281,8 @@ async function apiDelete(req, res, s3, prisma) {
   const addr = parseNaddr(site);
   if (!addr) return sendError(res, "Bad site '" + site + "'", 400);
 
+  // to make it idempotent, we're finding any trace of our
+  // site (even if it's already deleted)
   const sites = await prisma.domain.findMany({
     where: {
       pubkey: admin,
@@ -2223,30 +2305,32 @@ async function apiDelete(req, res, s3, prisma) {
   if (!info) return sendError(res, "Domain not reserved", 400);
 
   // must be already reserved for this website
-  const infoAddr = parseNaddr(info.site);
-  if (
-    info.domain !== domain ||
-    info.pubkey !== admin ||
-    !infoAddr ||
-    infoAddr.pubkey !== addr.pubkey ||
-    infoAddr.identifier !== addr.identifier ||
-    infoAddr.kind !== addr.kind
-  )
+  // const infoAddr = parseNaddr(info.site);
+  // if (
+  //   info.domain !== domain ||
+  //   info.pubkey !== admin ||
+  //   !infoAddr ||
+  //   infoAddr.pubkey !== addr.pubkey ||
+  //   infoAddr.identifier !== addr.identifier ||
+  //   infoAddr.kind !== addr.kind
+  // )
+  if (!isOwner(domain, admin, addr, info))
     return sendError(res, "Wrong site", 400);
 
   // mark as released for several days
-  const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  const data = await putDomainInfo(info, "released", expires, s3);
+  await deleteSite(info, s3, prisma);
+  // const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  // const data = await putDomainInfo(info, STATUS_RELEASED, expires, s3);
 
-  // ensure local copy of this domain
-  await upsertDomainInfo(prisma, data);
+  // // ensure local copy of this domain
+  // await upsertDomainInfo(prisma, data);
 
-  // delete files
-  await deleteDomainFiles(domain, s3);
+  // // delete files
+  // await deleteDomainFiles(domain, s3);
 
   // done
   sendReply(res, {
-    status: "released",
+    status: STATUS_RELEASED,
     expires,
   });
 }
@@ -2270,17 +2354,18 @@ async function apiCheck(req, res, s3) {
 
   const info = await fetchDomainInfo(domain, s3);
   if (info) {
-    const infoAddr = parseNaddr(info.site);
-    if (
-      info.domain !== domain ||
-      info.pubkey !== admin ||
-      !infoAddr ||
-      infoAddr.pubkey !== addr.pubkey ||
-      infoAddr.identifier !== addr.identifier ||
-      infoAddr.kind !== addr.kind
-    ) {
+    // const infoAddr = parseNaddr(info.site);
+    // if (
+    //   info.domain !== domain ||
+    //   info.pubkey !== admin ||
+    //   !infoAddr ||
+    //   (info.status !== "released" &&
+    //     (infoAddr.pubkey !== addr.pubkey ||
+    //       infoAddr.identifier !== addr.identifier ||
+    //       infoAddr.kind !== addr.kind))
+    // ) {
+    if (!canReserve(domain, admin, addr, info))
       return sendError(res, "Not available", 409);
-    }
   }
 
   return sendReply(res, {
@@ -3317,7 +3402,7 @@ async function api(host, port) {
   });
 }
 
-async function fetchRelayFilterSince(ndk, relay, f, since, abortPromises) {
+async function fetchRelayFilterSince(ndk, relays, f, since, abortPromises) {
   console.log("fetch since", since, relay);
   let until = undefined;
   let queue = [];
@@ -3331,7 +3416,7 @@ async function fetchRelayFilterSince(ndk, relay, f, since, abortPromises) {
           limit: 1000, // ask as much as possible
         },
         { groupable: false },
-        NDKRelaySet.fromRelayUrls([relay], ndk)
+        NDKRelaySet.fromRelayUrls(relays, ndk)
       ),
       ...abortPromises,
     ]);
@@ -3458,6 +3543,12 @@ class EventSync {
     for (const [pubkey, author] of this.authors.entries()) {
       if (!author.relays) {
         author.relays = await fetchOutboxRelays(this.ndk, [pubkey]);
+
+        // drop bad relays
+        author.relays = author.relays.filter(
+          (r) => !BLACKLISTED_RELAYS.find((b) => r.startsWith(b))
+        );
+
         if (author.relays.length > 5) {
           // only use 5 random outbox relays
           shuffleArray(author.relays);
@@ -3509,25 +3600,6 @@ class EventSync {
           if (r.connectivity.status !== NDKRelayStatus.CONNECTED) {
             console.log("still not connected to", url);
             ok();
-            // console.log("connecting to", url);
-            // try {
-            //   await r.connect(1000, /* reconnect */ false);
-            // } catch {}
-            // console.log(
-            //   "finished connecting to",
-            //   url,
-            //   "status",
-            //   r.connectivity.status
-            // );
-            // if (r.connectivity.status !== NDKRelayStatus.CONNECTED) {
-            //   console.log("failed to connect to", url);
-            //   // FIXME ndk doesn't really disconnect, it keeps trying to reconnect,
-            //   // so this login makes no sense
-            //   // r.disconnect();
-            //   // this.ndk.pool.removeRelay(url);
-            //   ok();
-            //   return;
-            // }
           }
 
           console.log("relay", url, "pubkeys", relay.pubkeys.length);
@@ -3536,9 +3608,9 @@ class EventSync {
             const batch = relay.pubkeys.splice(0, batchSize);
             const events = await fetchRelayFilterSince(
               this.ndk,
-              url,
+              [url],
               {
-                kinds: [KIND_NOTE, KIND_LONG_NOTE],
+                kinds: [KIND_NOTE, KIND_LONG_NOTE, KIND_PINNED_TO_SITE],
                 authors: batch,
               },
               Number(relay.fetched),
@@ -3573,7 +3645,7 @@ async function getDeployed(prisma) {
   return (
     await prisma.domain.findMany({
       where: {
-        status: "deployed",
+        status: STATUS_DEPLOYED,
       },
     })
   )
@@ -3627,13 +3699,20 @@ async function ssrWatch() {
     // we don't do full re-render
     const newSites = await fetchRelayFilterSince(
       ndk,
-      SITE_RELAY,
+      SITE_RELAYS,
       { kinds: [KIND_SITE] },
       last_site_tm,
       // timeout
       [new Promise((ok) => setTimeout(ok, 5000))]
     );
     last_site_tm = Math.floor(Date.now() / 1000) - SYNC_BUFFER_SEC;
+
+    const rerender = async (domain, updated) => {
+      await prisma.domain.update({
+        where: { domain },
+        data: { updated },
+      });
+    };
 
     for (const s of newSites) {
       if (s.kind !== KIND_SITE) continue;
@@ -3652,10 +3731,11 @@ async function ssrWatch() {
         console.log("site event already rendered", s.rawEvent());
       } else {
         console.log("schedule rerender", s.rawEvent());
-        await prisma.domain.update({
-          where: { domain: d.domain },
-          data: { updated: s.created_at },
-        });
+        await rerender(d.domain, s.created_at);
+        // await prisma.domain.update({
+        //   where: { domain: d.domain },
+        //   data: { updated: s.created_at },
+        // });
       }
 
       const naddr = nip19.naddrEncode(s.addr);
@@ -3681,6 +3761,20 @@ async function ssrWatch() {
         console.log("scheduling new event", id, "sites", siteNaddrs.length);
         for (const naddr of siteNaddrs) {
           const s = sites.get(naddr);
+          const d = getDomain(s.addr);
+
+          // full rerender for changed pins
+          if (e.kind === KIND_PINNED_TO_SITE) {
+            console.log(
+              "scheduling rerender for changed pins",
+              d.domain,
+              e.rawEvent()
+            );
+            await rerender(d.domain, e.created_at);
+            continue;
+          }
+
+          // load to check if event matches our filters
           if (!s.store) {
             const url = tv(s, "r");
             const parser = new NostrParser(url);
@@ -3691,7 +3785,6 @@ async function ssrWatch() {
           }
           if (!s.store.matchObject(e)) continue;
 
-          const d = getDomain(s.addr);
           console.log(
             "scheduling new event",
             id,
@@ -3714,7 +3807,7 @@ async function ssrWatch() {
     // mark all existing sites
     const ec = await prisma.domain.updateMany({
       where: {
-        status: "deployed",
+        status: STATUS_DEPLOYED,
         fetched: {
           gt: 0,
         },
@@ -3726,7 +3819,7 @@ async function ssrWatch() {
     // mark all new sites, there shouldn't be too many
     const nc = await prisma.domain.updateMany({
       where: {
-        status: "deployed",
+        status: STATUS_DEPLOYED,
         fetched: 0,
         domain: {
           in: deployed.filter((d) => !d.fetched).map((d) => d.domain),
