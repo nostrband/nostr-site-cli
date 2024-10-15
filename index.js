@@ -56,6 +56,7 @@ import {
   prepareSiteByContent,
   toRGBString,
   KIND_PINNED_TO_SITE,
+  tags,
 } from "libnostrsite";
 
 import fs from "fs";
@@ -1930,7 +1931,7 @@ function canReserve(domain, admin, addr, info) {
     infoAddr.identifier === addr.identifier
   ) {
     // all ok, already assigned to same site
-    console.log("Already assigned", domain, site);
+    console.log("Already assigned", domain, addr);
     return true;
   } else if (
     info.domain === domain &&
@@ -2233,6 +2234,8 @@ async function deleteSite(info, s3, prisma) {
 
   // delete files
   await deleteDomainFiles(data.domain, s3);
+
+  return expires;
 }
 
 async function deleteDomainFiles(domain, s3, keys = undefined) {
@@ -2318,7 +2321,7 @@ async function apiDelete(req, res, s3, prisma) {
     return sendError(res, "Wrong site", 400);
 
   // mark as released for several days
-  await deleteSite(info, s3, prisma);
+  const expires = await deleteSite(info, s3, prisma);
   // const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
   // const data = await putDomainInfo(info, STATUS_RELEASED, expires, s3);
 
@@ -3494,18 +3497,20 @@ class EventSync {
   }
 
   contributors(site) {
-    const pubkeys = tvs(site, "p");
+    const pubkeys = tags(site, "p").map(t => t[1]);
     if (!pubkeys.length) pubkeys.push(site.pubkey);
     return pubkeys;
   }
 
   addAuthor(pubkey, naddr, fetched) {
+    console.log("add author", pubkey, fetched, "new", !this.authors.get(pubkey), naddr);
     const author = this.authors.get(pubkey) || {
       sites: [],
     };
     author.sites.push(naddr);
     // remember earliest fetch time
     if (!author.fetched || author.fetched > fetched) author.fetched = fetched;
+    console.log("add author", pubkey, fetched, " => ", author.fetched);
     this.authors.set(pubkey, author);
   }
 
@@ -3518,7 +3523,7 @@ class EventSync {
   }
 
   addSite(naddr, site, wasSite, fetched) {
-    console.log("eventSync add site", naddr, site, wasSite, fetched);
+    console.log("eventSync add site", naddr, "contributors", this.contributors(site), "wasSite", !!wasSite, fetched, site.rawEvent());
 
     // remove old contributors
     if (wasSite) {
@@ -3628,7 +3633,12 @@ class EventSync {
     }
 
     // wait for all relays
-    await Promise.all(promises);
+    try {
+      await Promise.all(promises);
+    } catch (e) {
+      console.log("error", e);
+      throw e;
+    }
 
     console.log(
       "event sync authors",
@@ -3672,7 +3682,7 @@ async function ssrWatch() {
     explicitRelayUrls: [SITE_RELAY],
     blacklistRelayUrls: BLACKLISTED_RELAYS,
   });
-  ndk.connect();
+  ndk.connect().catch(e => console.log("connect error", e));
 
   const sites = new Map();
   const events = new Map();
@@ -4519,7 +4529,10 @@ try {
     const port = parseInt(process.argv[4]);
     api(host, port);
   } else if (method === "ssr_watch") {
-    ssrWatch();
+    ssrWatch().catch(e => {
+      console.log("error", e);
+      throw e;
+    });
   } else if (method === "ssr_render") {
     ssrRender();
   } else if (method === "publish_site_event") {
