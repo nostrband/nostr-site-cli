@@ -57,6 +57,7 @@ import {
   toRGBString,
   KIND_PINNED_TO_SITE,
   tags,
+  fetchEvents,
 } from "libnostrsite";
 
 import fs from "fs";
@@ -121,7 +122,7 @@ const DOMAINS_BUCKET = "domains.npub.pro";
 const CUSTOM_BUCKET = "custom.npub.pro";
 
 const LAMBDA_DOMAIN_TO_PATH =
-  "arn:aws:lambda:us-east-1:945458476897:function:subDomainToS3Path:16";
+  "arn:aws:lambda:us-east-1:945458476897:function:subDomainToS3Path:17";
 const LAMBDA_HANDLE_403 =
   "arn:aws:lambda:us-east-1:945458476897:function:subDomain403Handler:11";
 
@@ -141,10 +142,12 @@ const OTP_TTL = 300000; // 5 minutes
 
 const DEFAULT_BLOSSOM_SERVERS = [
   // trying it as default server
-  "https://cdn.nostrcheck.me/",
-
-  // our server, w/ discovery enabled
   "https://blossom.npubpro.com/",
+  "https://cdn.nostrcheck.me/",
+  // kieran
+  //  "https://nostr.download/",
+  // our server, w/ discovery enabled
+  //"https://blossom.npubpro.com/",
   // doesn't return proper mime type
   // "https://cdn.satellite.earth/",
   // no longer accepts non-media uploads
@@ -318,13 +321,13 @@ async function checkBlossomFile({
   server,
   hash,
   getAuth,
+  debug = false,
 }) {
   try {
     const blob = await BlossomClient.getBlob(server, hash, getAuth);
     if (!blob) return false;
-    const blobHash = bytesToHex(
-      sha256(new Uint8Array(await blob.arrayBuffer()))
-    );
+    const data = new Uint8Array(await blob.arrayBuffer());
+    const blobHash = bytesToHex(sha256(data));
     const exists = blobHash === hash;
     console.log(
       entry,
@@ -337,6 +340,8 @@ async function checkBlossomFile({
       "blobHash",
       blobHash
     );
+    if (!exists && debug)
+      console.log("bad data", new TextDecoder().decode(data));
     return exists;
   } catch (e) {
     console.log(e);
@@ -366,13 +371,15 @@ async function uploadBlossomFile({
 
     const reply = await res.json();
     console.log(entry, "upload reply", reply);
-    if (reply.sha256 !== hash || reply.type !== mime)
+    if (reply.sha256 !== hash || (mime !== "" && reply.type !== mime))
       console.log(
         entry,
         "failed to upload to",
         server,
         "wrong reply hash",
-        reply.sha256
+        reply.sha256,
+        "expected",
+        hash
       );
     else if (!reply.url)
       console.log(entry, "failed to upload to", server, reply);
@@ -1945,14 +1952,14 @@ function canReserve(domain, admin, addr, info) {
   } else if (
     info.domain === domain &&
     info.pubkey === admin &&
-    info.status === "released"
+    info.status === STATUS_RELEASED
   ) {
     // all ok, this domain was released by this pubkey
     console.log("Released by pubkey", domain, info.pubkey);
     return true;
   } else if (
     info.domain === domain &&
-    info.status === "released" &&
+    info.status === STATUS_RELEASED &&
     info.expires < Date.now()
   ) {
     // all ok, this domain was released long ago by other pubkey
@@ -2205,18 +2212,105 @@ async function apiDeploy(req, res, s3, prisma) {
     if (oldInfo && oldInfo.pubkey === admin) {
       // delete the old deployment
       await deleteSite(oldInfo, s3, prisma);
-
-      // const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
-      // // mark as released on aws
-      // const delInfo = await putDomainInfo(oldInfo, STATUS_RELEASED, expires, s3);
-
-      // // update locally
-      // await upsertDomainInfo(prisma, delInfo);
-
-      // // delete files
-      // await deleteDomainFiles(delInfo.domain, s3);
     }
   }
+
+  sendReply(res, {
+    status: STATUS_DEPLOYED,
+    expires,
+  });
+}
+
+/**
+ *
+ * @param {*} from* - old site addr
+ * @param {*} to* - new site addr
+ * @returns
+ */
+
+async function apiMigrate(req, res, s3, prisma) {
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+
+  const fromSite = url.searchParams.get("from");
+  const toSite = url.searchParams.get("to");
+
+  if (!fromSite || !toSite) return sendError(res, "Specify sites", 400);
+
+  const fromAddr = parseNaddr(fromSite);
+  if (!fromAddr) return sendError(res, "Bad site '" + fromSite + "'", 400);
+  const toAddr = parseNaddr(fromSite);
+  if (!toAddr) return sendError(res, "Bad site '" + toSite + "'", 400);
+
+  const domain = await getSiteDomain(admin, fromAddr, prisma);
+  if (!domain) return sendError(res, "Not found site '" + fromSite + "'", 400);
+  const checkToDomain = await getSiteDomain(admin, toAddr, prisma);
+  if (checkToDomain)
+    return sendError(res, "Already exists site '" + toSite + "'", 400);
+
+  // must be reserved before deploy
+  const info = await fetchDomainInfo(domain, s3);
+  if (
+    !info ||
+    info.pubkey !== admin ||
+    info.site !== fromSite ||
+    info.domain !== domain ||
+    info.status !== STATUS_DEPLOYED
+  ) {
+    return sendError(res, "Domain not reserved", 400);
+  }
+
+  // fake pre-release to make canReserve work
+  info.status = STATUS_RELEASED;
+  if (!canReserve(domain, admin, toAddr, info))
+    return sendError(res, "Wrong site", 400);
+
+  // delete old site data
+  await deleteDomainFiles(domain, s3);
+
+  // pre-render one page and publish
+  await spawn("release_website_zip_preview", [
+    toSite,
+    "20",
+    "domain:" + domain,
+  ]);
+
+  // now also migrate the attached domains,
+  // all we need to do is update local mapping,
+  // the CDN-level mapping operates with subdomains,
+  // which we've just redirected above
+  const attached = await prisma.attach.findMany({
+    where: {
+      pubkey: admin,
+      site: fromSite,
+    },
+  });
+  for (const data of attached) {
+    data.site = toSite;
+    await prisma.attach.upsert({
+      // set toSite
+      update: { ...data, site: toSite },
+      // to fromSite
+      where: {
+        pubkey_site_domain: {
+          pubkey: admin,
+          site: fromSite,
+          domain: data.domain,
+        },
+      },
+    });
+  }
+
+  // set the site
+  info.site = toSite;
+
+  const expires = 0;
+  const data = await putDomainInfo(info, STATUS_DEPLOYED, expires, s3);
+
+  // ensure local copy of this domain
+  await upsertDomainInfo(prisma, data);
 
   sendReply(res, {
     status: STATUS_DEPLOYED,
@@ -2308,28 +2402,11 @@ async function apiDelete(req, res, s3, prisma) {
   if (!info) return sendError(res, "Domain not reserved", 400);
 
   // must be already reserved for this website
-  // const infoAddr = parseNaddr(info.site);
-  // if (
-  //   info.domain !== domain ||
-  //   info.pubkey !== admin ||
-  //   !infoAddr ||
-  //   infoAddr.pubkey !== addr.pubkey ||
-  //   infoAddr.identifier !== addr.identifier ||
-  //   infoAddr.kind !== addr.kind
-  // )
   if (!isOwner(domain, admin, addr, info))
     return sendError(res, "Wrong site", 400);
 
   // mark as released for several days
   const expires = await deleteSite(info, s3, prisma);
-  // const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  // const data = await putDomainInfo(info, STATUS_RELEASED, expires, s3);
-
-  // // ensure local copy of this domain
-  // await upsertDomainInfo(prisma, data);
-
-  // // delete files
-  // await deleteDomainFiles(domain, s3);
 
   // done
   sendReply(res, {
@@ -3374,6 +3451,8 @@ async function api(host, port) {
         await apiDelete(req, res, s3, prisma);
       } else if (req.url.startsWith("/check")) {
         await apiCheck(req, res, s3);
+      } else if (req.url.startsWith("/migrate")) {
+        await apiMigrate(req, res, s3, prisma);
       } else if (req.url.startsWith("/authotp")) {
         await apiAuthOTP(req, res, prisma);
       } else if (req.url.startsWith("/auth")) {
@@ -3406,7 +3485,7 @@ async function api(host, port) {
 }
 
 async function fetchRelayFilterSince(ndk, relays, f, since, abortPromises) {
-  console.log("fetch since", since, relays);
+  console.log("fetch since", since, relays, f);
   let until = undefined;
   let queue = [];
   do {
@@ -3497,13 +3576,20 @@ class EventSync {
   }
 
   contributors(site) {
-    const pubkeys = tags(site, "p").map(t => t[1]);
+    const pubkeys = tags(site, "p").map((t) => t[1]);
     if (!pubkeys.length) pubkeys.push(site.pubkey);
     return pubkeys;
   }
 
   addAuthor(pubkey, naddr, fetched) {
-    console.log("add author", pubkey, fetched, "new", !this.authors.get(pubkey), naddr);
+    console.log(
+      "add author",
+      pubkey,
+      fetched,
+      "new",
+      !this.authors.get(pubkey),
+      naddr
+    );
     const author = this.authors.get(pubkey) || {
       sites: [],
     };
@@ -3523,7 +3609,16 @@ class EventSync {
   }
 
   addSite(naddr, site, wasSite, fetched) {
-    console.log("eventSync add site", naddr, "contributors", this.contributors(site), "wasSite", !!wasSite, fetched, site.rawEvent());
+    console.log(
+      "eventSync add site",
+      naddr,
+      "contributors",
+      this.contributors(site),
+      "wasSite",
+      !!wasSite,
+      fetched,
+      site.rawEvent()
+    );
 
     // remove old contributors
     if (wasSite) {
@@ -3682,7 +3777,7 @@ async function ssrWatch() {
     explicitRelayUrls: [SITE_RELAY],
     blacklistRelayUrls: BLACKLISTED_RELAYS,
   });
-  ndk.connect().catch(e => console.log("connect error", e));
+  ndk.connect().catch((e) => console.log("connect error", e));
 
   const sites = new Map();
   const events = new Map();
@@ -4475,6 +4570,48 @@ async function testLB() {
   console.log("response", response);
 }
 
+async function testBlossomUpload(server, path) {
+  await ensureAuth();
+
+  const { BlossomClient } = await import("blossom-client-sdk/client");
+
+  const name = path.split("/").pop();
+  const content = await prepareContentBuffer(path);
+  const file = new File([toArrayBuffer(content)], name);
+
+  const mime = getMime(name);
+  const hash = await BlossomClient.getFileSha256(file);
+  console.log(path, "processing", hash);
+
+  const pubkey = (await signer.user()).pubkey;
+  const signEvent = makeSignEvent(pubkey);
+
+  const getAuth = await BlossomClient.getGetAuth(signEvent);
+  const uploadAuth = await BlossomClient.getUploadAuth(file, signEvent);
+
+  console.log(path, "checking server", server);
+  const uploaded = await checkBlossomFile({
+    path,
+    BlossomClient,
+    server,
+    hash,
+    getAuth,
+    debug: true,
+  });
+  console.log("uploaded", uploaded);
+
+  const r = await uploadBlossomFile({
+    path,
+    BlossomClient,
+    server,
+    file,
+    mime,
+    uploadAuth,
+    hash,
+  });
+  console.log("result", r);
+}
+
 // main
 try {
   console.log(process.argv);
@@ -4529,7 +4666,7 @@ try {
     const port = parseInt(process.argv[4]);
     api(host, port);
   } else if (method === "ssr_watch") {
-    ssrWatch().catch(e => {
+    ssrWatch().catch((e) => {
       console.log("error", e);
       throw e;
     });
@@ -4646,10 +4783,34 @@ try {
     testDefaultIpRoute();
   } else if (method === "test_lb") {
     testLB();
+  } else if (method === "blossom_upload") {
+    const server = process.argv[3];
+    const path = process.argv[4];
+    testBlossomUpload(server, path);
   } else if (method === "dns_nocache") {
     const domain = process.argv[3];
     const type = process.argv[4];
     dnsResolveNoCache(domain, type);
+  } else if (method === "outbox_relays") {
+    const pubkey = process.argv[3];
+    const ndk = new NDK({
+      //  explicitRelayUrls: [...OUTBOX_RELAYS],
+    });
+    ndk.connect();
+    await fetchOutboxRelays(ndk, [pubkey]);
+    // const e = await ndk.fetchEvents(
+    //   {
+    //     // @ts-ignore
+    //     kinds: [KIND_CONTACTS, KIND_RELAYS],
+    //     authors: [pubkey],
+    //   },
+    //   {
+    //     closeOnEose: true,
+    //     groupable: false,
+    //   },
+    //   NDKRelaySet.fromRelayUrls(OUTBOX_RELAYS, ndk)
+    // );
+    // console.log("fetched", e.size);
   }
 } catch (e) {
   console.error(e);
