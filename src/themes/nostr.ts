@@ -1,4 +1,4 @@
-import { NDKEvent } from "@nostr-dev-kit/ndk";
+import NDK, { NDKEvent } from "@nostr-dev-kit/ndk";
 import {
   ENGINE,
   KIND_FILE,
@@ -7,6 +7,7 @@ import {
   OPENSATS_PUBKEY,
 } from "../common/const";
 import { cliPubkey, cliSigner } from "../auth/cli-auth";
+// @ts-ignore
 import { KIND_PACKAGE, KIND_THEME } from "libnostrsite";
 
 export async function fetchFileEvent({
@@ -15,6 +16,12 @@ export async function fetchFileEvent({
   pubkey,
   hash,
   blossomUrls,
+}: {
+  ndk: NDK;
+  entry: string;
+  pubkey: string;
+  hash: string;
+  blossomUrls: string[];
 }) {
   const filter = {
     kinds: [KIND_FILE],
@@ -49,6 +56,13 @@ export async function publishFileEvent({
   blossomUrls,
   hash,
   file,
+}: {
+  ndk: NDK;
+  entry: string;
+  mime: string;
+  blossomUrls: string[];
+  hash: string;
+  file: File;
 }) {
   const event = new NDKEvent(ndk, {
     kind: KIND_FILE,
@@ -81,6 +95,17 @@ export async function publishPackageEvent({
   themeAddr,
   pkg,
   packageHash,
+}: {
+  ndk: NDK;
+  readme: string;
+  packageJson: any;
+  themeAddr: string;
+  pkg: {
+    hash: string;
+    entry: string;
+    url: string;
+  }[];
+  packageHash: string;
 }) {
   // prepare package event
   const event = new NDKEvent(ndk, {
@@ -100,7 +125,7 @@ export async function publishPackageEvent({
       ["x", packageHash],
       ["l", LABEL_THEME, LABEL_ONTOLOGY],
       ["L", LABEL_ONTOLOGY],
-      ["a", themeAddr, ndk.pool.relays.values().next().value.url],
+      ["a", themeAddr, ndk.pool.relays.values().next().value!.url],
       ["zap", OPENSATS_PUBKEY],
     ],
   });
@@ -126,6 +151,11 @@ export async function publishThemeEvent({
   readme,
   packageJson,
   packageEventId,
+}: {
+  ndk: NDK,
+  readme: string,
+  packageJson: any,
+  packageEventId: string
 }) {
   // prepare theme event
   const event = new NDKEvent(ndk, {
@@ -140,7 +170,7 @@ export async function publishThemeEvent({
       ["summary", packageJson?.description || ""],
       ["version", packageJson?.version || ""],
       ["license", packageJson?.license || ""],
-      ["e", packageEventId, ndk.pool.relays.values().next().value.url],
+      ["e", packageEventId, ndk.pool.relays.values().next().value!.url],
       ["z", ENGINE],
       ["zap", OPENSATS_PUBKEY],
     ],

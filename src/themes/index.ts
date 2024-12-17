@@ -4,16 +4,40 @@ import { DEFAULT_BLOSSOM_SERVERS, DEFAULT_RELAYS } from "../common/const";
 import NDK, { NDKEvent, NDKRelaySet } from "@nostr-dev-kit/ndk";
 import { prepareContentBuffer } from "./utils";
 import { getMime, toArrayBuffer } from "../common/utils";
-import { fetchFileEvent, publishFileEvent, publishPackageEvent, publishThemeEvent } from "./nostr";
+import {
+  fetchFileEvent,
+  publishFileEvent,
+  publishPackageEvent,
+  publishThemeEvent,
+} from "./nostr";
 import { bytesToHex } from "@noble/hashes/utils";
 import { sha256 } from "@noble/hashes/sha256";
-import { KIND_PACKAGE, KIND_THEME, OUTBOX_RELAYS, SITE_RELAY, fetchNostrSite, fetchOutboxRelays, parseATag, parseAddr, tv } from "libnostrsite";
-import { Blossom } from "../blossom"
+import {
+  KIND_PACKAGE,
+  KIND_THEME,
+  OUTBOX_RELAYS,
+  SITE_RELAY,
+  fetchNostrSite,
+  fetchOutboxRelays,
+  parseATag,
+  parseAddr,
+  tv,
+  // @ts-ignore
+} from "libnostrsite";
+import { Blossom } from "../blossom";
 
 // publish a theme
 export async function publishTheme(
-  dir,
-  { latest = false, reupload = false, includeFonts = false }
+  dir: string,
+  {
+    latest = false,
+    reupload = false,
+    includeFonts = false,
+  }: {
+    latest?: boolean;
+    reupload?: boolean;
+    includeFonts?: boolean;
+  } = {}
 ) {
   await ensureAuth();
 
@@ -75,7 +99,7 @@ export async function publishTheme(
 
   let readme = "";
   let packageJson: any = undefined;
-  const pkg: { entry: string, hash: string, url: string }[] = [];
+  const pkg: { entry: string; hash: string; url: string }[] = [];
   for (const entry of entries) {
     const name = entry.split("/").pop();
     if (!name) continue;
@@ -127,7 +151,7 @@ export async function publishTheme(
       if (uploaded) blossomUrls.push(new URL("/" + hash, server).href);
     }
     console.log(entry, "publish file meta event with urls", blossomUrls);
-    if (!blossomUrls.length) throw new Error("Failed to upload file "+entry);
+    if (!blossomUrls.length) throw new Error("Failed to upload file " + entry);
 
     // check if file meta event is already published
     let file_event = await fetchFileEvent({
@@ -152,7 +176,7 @@ export async function publishTheme(
     }
 
     if (!file_event)
-      throw new Error("Failed to publish meta event for file "+entry);
+      throw new Error("Failed to publish meta event for file " + entry);
 
     pkg.push({
       entry,
@@ -196,7 +220,6 @@ export async function publishTheme(
     });
   }
 }
-
 
 export async function updateTheme(siteId: string) {
   await ensureAuth();

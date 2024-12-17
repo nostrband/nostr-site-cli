@@ -411,8 +411,8 @@ export async function testMain(argv: string[]) {
     const pubkey = argv[1];
     return testSessionToken(pubkey);
   } else if (method === "test_zip_dir") {
-    const dir = process.argv[1];
-    const path = process.argv[2];
+    const dir = argv[1];
+    const path = argv[2];
     return zipSiteDir(dir, path);
   } else if (method === "test_event") {
     return testEvent();

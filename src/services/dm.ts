@@ -9,14 +9,13 @@ import {
 import {
   KIND_SITE,
   tv,
-  parseNaddr,
   fetchEvent,
   fetchEvents,
   fetchInboxRelays,
   // @ts-ignore
 } from "libnostrsite";
 import { Event, nip19 } from "nostr-tools";
-import { fetchProfile } from "../nostr";
+import { fetchProfile, parseNaddr } from "../nostr";
 
 async function createZapSplit({
   siteId,
@@ -46,6 +45,8 @@ async function createZapSplit({
 
   if (siteId && !targetPubkey) {
     const siteAddr = parseNaddr(siteId);
+    if (!siteAddr) throw new Error("Bad site id");
+
     const site = await fetchEvent(
       ndk,
       {
@@ -232,10 +233,10 @@ export async function dmMain(argv: string[]) {
 
   const method = argv[0];
   if (method === "create_zap_split") {
-    const pubkey = process.argv[1];
+    const pubkey = argv[1];
     return createZapSplit({ pubkey });
   } else if (method === "send_v4v_dm") {
-    const pubkey = process.argv[1];
+    const pubkey = argv[1];
     return sendValue4ValueDM(pubkey);
   }
 }

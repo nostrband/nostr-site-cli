@@ -286,41 +286,41 @@ export async function cliMain(argv: string[]) {
 
   const method = argv[0];
   if (method === "render_website") {
-    const dir = process.argv[1];
-    const naddr = process.argv[2];
-    const limit = process.argv.length > 3 ? parseInt(process.argv[3]) : 0;
+    const dir = argv[1];
+    const naddr = argv[2];
+    const limit = argv.length > 3 ? parseInt(argv[3]) : 0;
     return renderWebsite(dir, naddr, limit);
   } else if (method.startsWith("release_website")) {
-    const naddr = process.argv[1];
+    const naddr = argv[1];
     const zip = method.includes("zip");
     const preview = method.includes("preview");
     let paths: string[] | number = [];
     let domain: string | undefined;
-    for (let i = 2; i < process.argv.length; i++) {
-      if (process.argv[i].startsWith("domain:")) {
-        domain = process.argv[i].split("domain:")[1];
+    for (let i = 2; i < argv.length; i++) {
+      if (argv[i].startsWith("domain:")) {
+        domain = argv[i].split("domain:")[1];
       } else {
-        paths.push(process.argv[i]);
+        paths.push(argv[i]);
       }
     }
     if (paths.length === 1 && !paths[0].startsWith("/"))
       paths = parseInt(paths[0]);
     return releaseWebsite(naddr, paths, { zip, preview, domain });
   } else if (method === "publish_site_event") {
-    const pubkey = process.argv[1];
-    const kinds = process.argv[2].split(",").map((k) => parseInt(k));
-    const hashtags = process.argv[3].split(",").filter((k) => k.trim() !== "");
-    const themeId = process.argv[4];
-    const domain = process.argv?.[5] || "";
-    const d_tag = process.argv?.[6] || "";
+    const pubkey = argv[1];
+    const kinds = argv[2].split(",").map((k) => parseInt(k));
+    const hashtags = argv[3].split(",").filter((k) => k.trim() !== "");
+    const themeId = argv[4];
+    const domain = argv?.[5] || "";
+    const d_tag = argv?.[6] || "";
     return publishSiteEvent(pubkey, kinds, hashtags, themeId, domain, d_tag);
   } else if (method === "deploy_site") {
-    const domain = process.argv[1];
-    const naddr = process.argv[2];
+    const domain = argv[1];
+    const naddr = argv[2];
     return deploySite(domain, naddr);
   } else if (method.startsWith("reserve_site")) {
-    const domain = process.argv[1];
-    const naddr = process.argv[2];
+    const domain = argv[1];
+    const naddr = argv[2];
     const noRetry = method.includes("no_retry");
     return reserveSite(domain, naddr, noRetry);
   } else if (method === "generate_key") {
@@ -329,22 +329,22 @@ export async function cliMain(argv: string[]) {
   } else if (method === "get_session_token") {
     return getSessionToken();
   } else if (method === "get_admin_session_token") {
-    const pubkey = process.argv[1];
+    const pubkey = argv[1];
     return getAdminSessionToken(pubkey);
   } else if (method === "theme_by_name") {
-    const name = process.argv[1];
+    const name = argv[1];
     return getThemeByName(name);
   } else if (method === "zip_dir") {
-    const dir = process.argv[1];
-    const path = process.argv[1];
+    const dir = argv[1];
+    const path = argv[1];
     return zipSiteDir(dir, path);
   } else if (method === "check_domain") {
-    const domain = process.argv[1];
-    const site = process.argv[2];
+    const domain = argv[1];
+    const site = argv[2];
     return checkDomain(domain, site);
   } else if (method === "change_website_user") {
-    const siteId = process.argv[1];
-    const pubkey = process.argv[2];
+    const siteId = argv[1];
+    const pubkey = argv[2];
     return changeWebsiteUser(siteId, pubkey);
   } else if (method === "generate_otp") {
     console.log("otp", generateOTP());
@@ -352,15 +352,15 @@ export async function cliMain(argv: string[]) {
   } else if (method === "resync_local_db") {
     return resyncLocalDb();
   } else if (method === "delete_domain_files") {
-    const domain = process.argv[1];
+    const domain = argv[1];
     return deleteDomainFilesS3(domain);
   } else if (method === "blossom_upload") {
-    const server = process.argv[1];
-    const path = process.argv[2];
+    const server = argv[1];
+    const path = argv[2];
     return blossomUpload(server, path);
   } else if (method === "dns_nocache") {
-    const domain = process.argv[1];
-    const type = process.argv[2];
+    const domain = argv[1];
+    const type = argv[2];
     return dnsResolveNoCache(domain, type);
   }
 }

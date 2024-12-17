@@ -1147,14 +1147,14 @@ export async function apiMain(argv: string[]) {
 
   const method = argv[0];
   if (method === "reserve_pubkey_domain") {
-    const pubkey = process.argv[1];
-    const domain = process.argv?.[2] || "";
-    const months = parseInt(process.argv?.[3]) || 3;
+    const pubkey = argv[1];
+    const domain = argv?.[2] || "";
+    const months = parseInt(argv?.[3]) || 3;
     console.log(pubkey, domain, months);
     return api.reservePubkeyDomain(pubkey, domain, months);
   } else if (method === "api") {
-    const host = process.argv[1];
-    const port = parseInt(process.argv[2]);
+    const host = argv[1];
+    const port = parseInt(argv[2]);
     return api.run(host, port);
   }
 }

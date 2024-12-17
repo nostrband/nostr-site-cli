@@ -1,11 +1,15 @@
 {
 	"compilerOptions": {
-		"target": "ES6",
-		"module": "CommonJS",
-		"strict": true,
 		"esModuleInterop": true,
+		"target": "ES6",
+		"module": "ESNext",
+		"moduleResolution": "node",
+		"strict": true,
 		"skipLibCheck": true,
 		"outDir": "dist"
 	},
+	"ts-node": {
+    "esm": true
+  },
 	"include": ["src"]
 }
