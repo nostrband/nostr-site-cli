@@ -2,10 +2,14 @@
   "name": "nostr-site-cli",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "src/index.ts",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node dist/index.js",
+    "dev": "nodemon --exec ts-node src/index.ts",
+    "build": "tsc",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev"
   },
   "author": "",
   "license": "ISC",
@@ -16,7 +20,7 @@
     "@aws-sdk/client-s3": "^3.583.0",
     "@noble/ciphers": "^0.5.3",
     "@noble/hashes": "^1.4.0",
-    "@nostr-dev-kit/ndk": "^2.7.1",
+    "@nostr-dev-kit/ndk": "^2.4.0",
     "@prisma/client": "^5.15.0",
     "@web-std/file": "^3.0.3",
     "archiver": "^7.0.1",
@@ -34,11 +38,19 @@
     "postcss-import": "^16.1.0",
     "postcss-nested-import": "^1.3.0",
     "postcss-url": "^10.1.3",
+    "secrets.js-grempe": "^2.0.0",
     "slugify": "^1.6.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2",
     "web-streams-polyfill": "^4.0.0",
     "ws": "^8.17.0"
   },
   "devDependencies": {
+    "@types/archiver": "^6.0.3",
+    "@types/mime-types": "^2.1.4",
+    "@types/postcss-import": "^14.0.3",
+    "@types/postcss-url": "^10.0.4",
+    "@types/ws": "^8.5.13",
     "prisma": "^5.15.0"
   }
 }
