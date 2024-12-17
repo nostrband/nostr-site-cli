@@ -58,6 +58,7 @@ import {
   KIND_PINNED_TO_SITE,
   tags,
   fetchEvents,
+  fetchEvent,
 } from "libnostrsite";
 
 import fs from "fs";
@@ -69,6 +70,7 @@ import NDK, {
   NDKRelaySet,
   NDKRelay,
   NDKRelayStatus,
+  NDKUser,
 } from "@nostr-dev-kit/ndk";
 import {
   nip19,
@@ -80,10 +82,12 @@ import {
 } from "nostr-tools";
 import readline from "node:readline";
 import { minePow } from "./pow.js";
-import { getProfileSlug } from "libnostrsite";
-import { fetchNostrSite } from "libnostrsite";
-import { fetchInboxRelays } from "libnostrsite";
-import { fetchOutboxRelays } from "libnostrsite";
+import {
+  getProfileSlug,
+  fetchNostrSite,
+  fetchInboxRelays,
+  fetchOutboxRelays,
+} from "libnostrsite";
 import {
   AddListenerCertificatesCommand,
   DescribeListenersCommand,
@@ -106,14 +110,17 @@ const KIND_PACKAGE = 1036;
 const KIND_SITE = 30512;
 const KIND_THEME = 30514;
 const KIND_PLUGIN = 30515;
+const KIND_ZAP_SPLIT = 1512;
 const KIND_NOTE = 1;
 const KIND_LONG_NOTE = 30023;
 
 const LABEL_THEME = "theme";
 const LABEL_ONTOLOGY = "org.nostrsite.ontology";
 
-const DEFAULT_ZAP_SPLIT =
+const OPENSATS_PUBKEY =
   "787338757fc25d65cd929394d5e7713cf43638e8d259e8dcf5c73b834eb851f2";
+const NPUB_PRO_PUBKEY =
+  "08eade50df51da4a42f5dc045e35b371902e06d6a805215bec3d72dc687ccb04";
 
 const ENGINE = "pro.npub.v1";
 
@@ -467,7 +474,7 @@ async function publishPackageEvent({
       ["l", LABEL_THEME, LABEL_ONTOLOGY],
       ["L", LABEL_ONTOLOGY],
       ["a", themeAddr, ndk.pool.relays.values().next().value.url],
-      ["zap", DEFAULT_ZAP_SPLIT],
+      ["zap", OPENSATS_PUBKEY],
     ],
   });
 
@@ -508,7 +515,7 @@ async function publishThemeEvent({
       ["license", packageJson?.license || ""],
       ["e", packageEventId, ndk.pool.relays.values().next().value.url],
       ["z", ENGINE],
-      ["zap", DEFAULT_ZAP_SPLIT],
+      ["zap", OPENSATS_PUBKEY],
     ],
   });
 
@@ -2228,20 +2235,24 @@ async function apiDeploy(req, res, s3, prisma) {
  * @returns
  */
 
-async function apiMigrate(req, res, s3, prisma) {
+async function apiMigrate(req, res, s3, prisma, ndk) {
   const admin = parseSession(req);
   if (!admin) return sendError(res, "Auth please", 401);
 
   const url = new URL(req.url, "http://localhost");
 
   const fromSite = url.searchParams.get("from");
+  const fromId = url.searchParams.get("fromId");
   const toSite = url.searchParams.get("to");
+  const relays = (url.searchParams.get("relays") || "")
+    .split(",")
+    .filter((r) => !!r);
 
   if (!fromSite || !toSite) return sendError(res, "Specify sites", 400);
 
   const fromAddr = parseNaddr(fromSite);
   if (!fromAddr) return sendError(res, "Bad site '" + fromSite + "'", 400);
-  const toAddr = parseNaddr(fromSite);
+  const toAddr = parseNaddr(toSite);
   if (!toAddr) return sendError(res, "Bad site '" + toSite + "'", 400);
 
   const domain = await getSiteDomain(admin, fromAddr, prisma);
@@ -2252,10 +2263,13 @@ async function apiMigrate(req, res, s3, prisma) {
 
   // must be reserved before deploy
   const info = await fetchDomainInfo(domain, s3);
+  const infoAddr = parseNaddr(info?.site);
   if (
     !info ||
     info.pubkey !== admin ||
-    info.site !== fromSite ||
+    infoAddr.pubkey !== fromAddr.pubkey ||
+    infoAddr.kind !== fromAddr.kind ||
+    infoAddr.identifier !== fromAddr.identifier ||
     info.domain !== domain ||
     info.status !== STATUS_DEPLOYED
   ) {
@@ -2312,6 +2326,12 @@ async function apiMigrate(req, res, s3, prisma) {
   // ensure local copy of this domain
   await upsertDomainInfo(prisma, data);
 
+  // delete event and old site record from db
+  await deleteSiteEvent(res, admin, fromSite, fromId, relays, prisma, ndk);
+
+  // FIXME migrate all pins? Do we allow pinning for sites that are delegated?
+
+  // ok
   sendReply(res, {
     status: STATUS_DEPLOYED,
     expires,
@@ -2387,7 +2407,9 @@ async function apiDelete(req, res, s3, prisma) {
   });
   const domainSite = sites.find((s) => {
     const a = parseNaddr(s.site);
+    if (!a) console.log("bad site", s.site, s);
     return (
+      a &&
       a.pubkey === addr.pubkey &&
       a.identifier === addr.identifier &&
       a.kind === addr.kind &&
@@ -3341,22 +3363,7 @@ async function apiSite(req, res, prisma, ndk) {
   }
 }
 
-async function apiDeleteSite(req, res, prisma, ndk) {
-  if (req.method !== "DELETE") return sendError(res, "Use delete", 400);
-
-  const admin = parseSession(req);
-  if (!admin) return sendError(res, "Auth please", 401);
-
-  const url = new URL(req.url, "http://localhost");
-  const site = url.searchParams.get("site");
-  const id = url.searchParams.get("id");
-  const relays = (url.searchParams.get("relays") || "")
-    .split(",")
-    .filter((r) => !!r);
-
-  if (!site) return sendError(res, "Specify site");
-  if (!relays.length) return sendError(res, "Specify relays", 400);
-
+async function deleteSiteEvent(res, admin, site, id, relays, prisma, ndk) {
   const key = getServerKey();
   const serverPubkey = getPublicKey(key);
 
@@ -3417,6 +3424,26 @@ async function apiDeleteSite(req, res, prisma, ndk) {
       pubkey: admin,
     },
   });
+}
+
+async function apiDeleteSiteEvent(req, res, prisma, ndk) {
+  if (req.method !== "DELETE") return sendError(res, "Use delete", 400);
+
+  const admin = parseSession(req);
+  if (!admin) return sendError(res, "Auth please", 401);
+
+  const url = new URL(req.url, "http://localhost");
+  const site = url.searchParams.get("site");
+  const id = url.searchParams.get("id");
+  const relays = (url.searchParams.get("relays") || "")
+    .split(",")
+    .filter((r) => !!r);
+
+  if (!site) return sendError(res, "Specify site");
+  if (!relays.length) return sendError(res, "Specify relays", 400);
+
+  // delete event and site record from db
+  await deleteSiteEvent(res, admin, site, id, relays, prisma, ndk);
 
   sendReply(res, {
     ok: true,
@@ -3452,7 +3479,7 @@ async function api(host, port) {
       } else if (req.url.startsWith("/check")) {
         await apiCheck(req, res, s3);
       } else if (req.url.startsWith("/migrate")) {
-        await apiMigrate(req, res, s3, prisma);
+        await apiMigrate(req, res, s3, prisma, ndk);
       } else if (req.url.startsWith("/authotp")) {
         await apiAuthOTP(req, res, prisma);
       } else if (req.url.startsWith("/auth")) {
@@ -3460,7 +3487,8 @@ async function api(host, port) {
       } else if (req.url.startsWith("/otp")) {
         await apiOTP(req, res, prisma, ndk);
       } else if (req.url.startsWith("/site")) {
-        if (req.method === "DELETE") await apiDeleteSite(req, res, prisma, ndk);
+        if (req.method === "DELETE")
+          await apiDeleteSiteEvent(req, res, prisma, ndk);
         else await apiSite(req, res, prisma, ndk);
       } else if (req.url.startsWith("/cert")) {
         if (req.method === "POST") await apiCreateCert(req, res, acm, prisma);
@@ -3872,11 +3900,17 @@ async function ssrWatch() {
 
           // full rerender for changed pins
           if (e.kind === KIND_PINNED_TO_SITE) {
+            const d_tag = `${KIND_SITE}:${s.addr.pubkey}:${s.addr.identifier}`
+            if (tv(e, 'd') !== d_tag) {
+              console.log("rerender of pins skip for", d.domain);
+              continue;
+            }
             console.log(
               "scheduling rerender for changed pins",
               d.domain,
               e.rawEvent()
             );
+            // FIXME check '#s' and only rerender target sites!
             await rerender(d.domain, e.created_at);
             continue;
           }
@@ -4272,6 +4306,16 @@ async function reserveSite(domain, naddr, noRetry) {
   console.log(Date.now(), "reserved", reply);
 }
 
+async function deleteSiteCall(domain, naddr) {
+  // await ensureAuth();
+
+  // const adminPubkey = (await signer.user()).pubkey;
+  const deleteReply = await fetchWithSession(
+    `${NPUB_PRO_API}/delete?domain=${domain}&site=${naddr}`
+  );
+  console.log(Date.now(), "delete", deleteReply);
+}
+
 function getSessionCipher() {
   const keyHex = process.env.API_SESSION_KEY;
   if (keyHex.length !== 64) throw new Error("No session key");
@@ -4612,6 +4656,215 @@ async function testBlossomUpload(server, path) {
   console.log("result", r);
 }
 
+async function createZapSplit({ siteId, pubkey: targetPubkey, ndk }) {
+  await ensureAuth();
+
+  const pubkey = (await signer.user()).pubkey;
+
+  ndk =
+    ndk ||
+    new NDK({
+      explicitRelayUrls: DEFAULT_RELAYS,
+    });
+  await ndk.connect();
+
+  const siteNames = [];
+  const addSite = (s) => {
+    const title = tv(s, "title") || tv(s, "name");
+    if (title) siteNames.push(title);
+  };
+
+  if (siteId && !targetPubkey) {
+    const siteAddr = parseNaddr(siteId);
+    const site = await fetchEvent(
+      ndk,
+      {
+        kinds: [siteAddr.kind],
+        authors: [siteAddr.pubkey],
+        "#d": [siteAddr.identifier],
+      },
+      DEFAULT_RELAYS,
+      3000
+    );
+    console.log("site", siteId, site.rawEvent());
+    if (!site) return;
+
+    targetPubkey = tv(site, "u") || site.pubkey;
+    addSite(site);
+  } else {
+    const sites = await fetchEvents(
+      ndk,
+      [
+        {
+          kinds: [KIND_SITE],
+          authors: [targetPubkey],
+        },
+        {
+          kinds: [KIND_SITE],
+          authors: [NPUB_PRO_PUBKEY],
+          "#u": [targetPubkey],
+        },
+      ],
+      DEFAULT_RELAYS,
+      3000
+    );
+    for (const s of [...sites]) addSite(s);
+    console.log("sites", siteNames);
+  }
+  console.log("target pubkey", targetPubkey);
+
+  const receivers = {};
+  receivers[NPUB_PRO_PUBKEY] = "Npub.pro team";
+  receivers[OPENSATS_PUBKEY] = "funding to FOSS projects, for Ghost themes";
+  receivers[
+    "726a1e261cc6474674e8285e3951b3bb139be9a773d1acf49dc868db861a1c11"
+  ] = "zapthreads plugin";
+  receivers[
+    "604e96e099936a104883958b040b47672e0f048c98ac793f37ffe4c720279eb2"
+  ] = "nostr-zap plugin";
+
+  let content = `#Value4Value support for the nostr-site${
+    siteNames.length > 1 ? "s" : ""
+  } titled "${siteNames[0]}"${
+    siteNames.length >= 2
+      ? `${siteNames.length > 2 ? "," : " and"} "${siteNames[1]}"`
+      : ""
+  }${
+    siteNames.length >= 3
+      ? `${siteNames.length > 3 ? "," : " and"} "${siteNames[2]}"`
+      : ""
+  }${
+    siteNames.length >= 4 ? ` and ${siteNames.length - 3} more` : ""
+  } to these amazing contributors:\n`;
+  for (const pubkey in receivers) {
+    const profile = await fetchProfile(ndk, pubkey);
+    let info = undefined;
+    try {
+      info = JSON.parse(profile.content);
+    } catch (e) {
+      console.log("Bad profile for", pubkey);
+    }
+
+    const name = info?.display_name || info?.name || "";
+    content += ` nostr:${nip19.npubEncode(pubkey)} ${
+      name ? `(${name})` : ""
+    }: ${receivers[pubkey]};\n`;
+  }
+
+  const event = new NDKEvent(ndk, {
+    kind: KIND_ZAP_SPLIT,
+    pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    content,
+    tags: [
+      ["alt", content],
+      ["p", targetPubkey],
+      //['e', site.id],
+      //["a", `${siteAddr.kind}:${siteAddr.pubkey}:${siteAddr.identifier}`],
+    ],
+  });
+
+  const pubkeys = Object.keys(receivers);
+  for (const pubkey of pubkeys) {
+    let split = 0;
+    if (pubkey === NPUB_PRO_PUBKEY) {
+      split = pubkeys.length - 1;
+    } else {
+      split = 1;
+    }
+    event.tags.push(["zap", pubkey, "wss://relay.nostr.band/", "" + split]);
+  }
+
+  await event.sign(signer);
+  console.log("signed", event.rawEvent());
+
+  const inboxRelays = await fetchInboxRelays(ndk, [targetPubkey]);
+  console.log("inbox relays", targetPubkey, inboxRelays);
+
+  const r = await event.publish(
+    NDKRelaySet.fromRelayUrls([...DEFAULT_RELAYS, inboxRelays], ndk)
+  );
+  console.log("published to ", r.size);
+
+  return event.id;
+}
+
+async function sendDM(type, targetPubkey) {
+  await ensureAuth();
+
+  const pubkey = (await signer.user()).pubkey;
+
+  const ndk = new NDK({
+    explicitRelayUrls: DEFAULT_RELAYS,
+  });
+  await ndk.connect();
+
+  let message = "";
+  if (type === "value4value") {
+    const zapSplitId = await createZapSplit({ pubkey: targetPubkey, ndk });
+    const nevent = nip19.neventEncode({ id: zapSplitId, relays: DEFAULT_RELAYS });
+    // convert the last char to percent-encoded version to make sure clients don't try to
+    // convert this nevent string into an event preview (nostrudel wtf??)
+    const neventParam = nevent.slice(0, nevent.length - 1) + "%" + nevent.charCodeAt(nevent.length - 1).toString(16)
+    console.log("neventParam", neventParam);
+
+    const updates = `Here is a summary of updates we released since the launch:\n
+  - custom domains can be attached to your sites;\n
+  - pinned/featured posts;\n
+  - several new themes;\n
+  - visitors on your sites can send all kinds of reactions, highlights, quotes, comments, can follow the post author, can send them DMs;\n
+  - a better designed admin panel for your convenience;\n
+  - multiple authors can be added to your site;\n
+  - customize your main call-to-action (Zap, Like, etc);\n
+  - homepage settings (hashtags, kinds);\n
+  - geohashes: shows a map under posts with a geohash;\n
+  - RSS feeds on your site, usable as a podcast feed;\n
+  - an improved smooth signup flow for your visitors;\n
+  - many bug fixes and small improvements;
+  \n\n`;
+
+    message = `Hello!\n\n
+Looks like you've been using Npub.pro for a while, and we are very happy to serve you!\n\n
+Our website publishing tools are free to use, but not free to create and improve. If you find them valuable, consider supporting us in the spirit of #Value4Value.\n\n
+Here is a convenient link with a zap-split, directing 50% of your tips to several contributors that made your websites work: https://zapper.fun/zap?id=${neventParam}\n\n
+${updates}
+Thank you for your support!\n\n
+- Npub.pro team.
+(If you don't like this message, please reply and let us know)\n\n
+`;
+  } else if (type === "use_blog") {
+    message = `Hello!\n
+Thank you for being an early adopter of npub.pro!\n
+We think the best way to learn new tools is to follow the early adopters. There is an infinite number of ways to use a nostr-website, and YOU can help others figure out the possibilities and best practices.\n
+Would you be interested in writing a long-form article about your experience with npub.pro? Why did you create your site? How are you using it? What you love, and what's missing?\n
+We are happy to zap you and will cross-post your article on our blog and share it with our community. Your story might inspire others to start their content creation journey!\n
+If you’re interested or have any questions feel free to reach out. We’d love to hear from you!\n
+Best regards,
+Npub.pro Team\n
+(If you don't like this message, please reply and let us know)\n\n
+`;
+  }
+
+  const dm = new NDKEvent(ndk, {
+    kind: 4,
+    pubkey: pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    content: await signer.encrypt(new NDKUser({ pubkey: targetPubkey }), message),
+    tags: [["p", targetPubkey]],
+  });
+
+  await dm.sign(signer);
+  console.log("signed dm", dm.rawEvent());
+
+  const inboxRelays = await fetchInboxRelays(ndk, [targetPubkey]);
+  console.log("inbox relays", targetPubkey, inboxRelays);
+
+  const r = await dm.publish(
+    NDKRelaySet.fromRelayUrls([...DEFAULT_RELAYS, inboxRelays], ndk)
+  );
+  console.log("published to ", r.size);
+}
+
 // main
 try {
   console.log(process.argv);
@@ -4686,6 +4939,10 @@ try {
     const domain = process.argv[3];
     const naddr = process.argv[4];
     deploySite(domain, naddr).then(() => process.exit());
+  } else if (method === "delete_site") {
+    const domain = process.argv[3];
+    const naddr = process.argv[4];
+    deleteSiteCall(domain, naddr).then(() => process.exit());
   } else if (method.startsWith("reserve_site")) {
     const domain = process.argv[3];
     const naddr = process.argv[4];
@@ -4787,6 +5044,16 @@ try {
     const server = process.argv[3];
     const path = process.argv[4];
     testBlossomUpload(server, path);
+  } else if (method === "create_zap_split") {
+    const pubkeyOrSiteId = process.argv[3];
+    createZapSplit({
+      siteId: pubkeyOrSiteId.startsWith("naddr") ? pubkeyOrSiteId : undefined,
+      pubkey: pubkeyOrSiteId.startsWith("naddr") ? undefined : pubkeyOrSiteId,
+    }).then(() => process.exit());
+  } else if (method === "send_dm") {
+    const type = process.argv[3];
+    const pubkey = process.argv[4];
+    sendDM(type, pubkey).then(() => process.exit());
   } else if (method === "dns_nocache") {
     const domain = process.argv[3];
     const type = process.argv[4];
