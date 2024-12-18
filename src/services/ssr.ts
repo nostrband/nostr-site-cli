@@ -1,4 +1,4 @@
-import NDK from "@nostr-dev-kit/ndk";
+import NDK, { NDKEvent } from "@nostr-dev-kit/ndk";
 import { DB } from "../db";
 import { BLACKLISTED_RELAYS, SITE_RELAY } from "../common/const";
 import { EventSync } from "../nostr/sync";
@@ -26,8 +26,12 @@ async function watch() {
   });
   ndk.connect().catch((e) => console.log("connect error", e));
 
-  const sites = new Map();
-  const events = new Map();
+  type SiteEvent = NDKEvent & {
+    addr?: { identifier: string; pubkey: string; kind: number };
+    store?: NostrStore;
+  };
+  const sites = new Map<string, SiteEvent>();
+  const events = new Map<string, NDKEvent>();
   const eventSync = new EventSync(ndk);
 
   // buffer for relay delays
@@ -45,7 +49,6 @@ async function watch() {
           d.addr!.identifier === addr.identifier &&
           d.addr!.pubkey === addr.pubkey
       );
-      if (!d) throw new Error("Domain not found");
       return d;
     };
 
@@ -54,7 +57,7 @@ async function watch() {
     // sites are fetched from a single dedicated relay,
     // for each site we check last rerender time, and if it's > event.created_at then
     // we don't do full re-render
-    const newSites = await fetchRelayFilterSince(
+    const newSites: SiteEvent[] = await fetchRelayFilterSince(
       ndk,
       [SITE_RELAY],
       { kinds: [KIND_SITE] },
@@ -67,9 +70,9 @@ async function watch() {
     for (const s of newSites) {
       if (s.kind !== KIND_SITE) continue;
 
-      const addr = eventAddr(s);
+      s.addr = eventAddr(s);
 
-      const d = getDomain(addr);
+      const d = getDomain(s.addr);
       if (!d) {
         console.log("site event ignored", s.id);
         continue;
@@ -84,9 +87,9 @@ async function watch() {
         await db.setRerenderDomain(d.domain, s.created_at!);
       }
 
-      const naddr = nip19.naddrEncode(addr);
+      const naddr = nip19.naddrEncode(s.addr);
       const wasSite = sites.get(naddr);
-      if (wasSite && wasSite.created_at >= s.created_at!) {
+      if (wasSite && wasSite.created_at! >= s.created_at!) {
         console.log("site event already subscribed", s.rawEvent());
       } else {
         sites.set(naddr, s);
@@ -100,19 +103,29 @@ async function watch() {
     for (const e of newEvents) {
       const id = eventId(e);
       const existing = events.get(id);
-      if (!existing || existing.created_at < e.created_at!) {
+      if (!existing || existing.created_at! < e.created_at!) {
         events.set(id, e);
 
         const siteNaddrs = eventSync.getAuthorSites(e.pubkey);
         console.log("scheduling new event", id, "sites", siteNaddrs.length);
         for (const naddr of siteNaddrs) {
           const s = sites.get(naddr);
+          if (!s) {
+            console.log("no site for", naddr);
+            continue;
+          }
+          if (!s.addr) throw new Error("No site addr");
+
           const d = getDomain(s.addr);
+          if (!d) {
+            console.log("no domain for", s.addr);
+            continue;
+          }
 
           // full rerender for changed pins
           if (e.kind === KIND_PINNED_TO_SITE) {
-            const d_tag = `${KIND_SITE}:${s.addr.pubkey}:${s.addr.identifier}`
-            if (tv(e, 'd') !== d_tag) {
+            const d_tag = `${KIND_SITE}:${s.addr.pubkey}:${s.addr.identifier}`;
+            if (tv(e, "d") !== d_tag) {
               console.log("rerender of pins skip for", d.domain);
               continue;
             }

@@ -79,8 +79,8 @@ export async function spawnService(
   method: string,
   args: string[]
 ) {
-  const child = childProcess.spawn("node", [
-    "dist/index.js",
+  const child = childProcess.spawn("tsx", [
+    "src/index.ts",
     service,
     method,
     ...args,

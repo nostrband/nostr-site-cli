@@ -90,9 +90,9 @@ export async function reserveSite(
   return reply;
 }
 
-export async function deploySite(domain: string, naddr: string) {
+export async function deploySite(domain: string, naddr: string, apiUrl?: string) {
   const reply = await fetchWithSession(
-    `${NPUB_PRO_API}/deploy?domain=${domain}&site=${naddr}`
+    `${apiUrl || NPUB_PRO_API}/deploy?domain=${domain}&site=${naddr}`
   );
   console.log(Date.now(), "deployed", reply);
   return reply;

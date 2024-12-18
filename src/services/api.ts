@@ -395,11 +395,12 @@ class Api {
       return sendError(res, "Wrong site", 400);
 
     // pre-render one page and publish
-    await spawnService("cli", "release_website_zip_preview", [
+    const code = await spawnService("cli", "release_website_zip_preview", [
       site,
       "20",
       "domain:" + domain,
     ]);
+    if (code) return sendError(res, "Failed to deploy website", 500);
 
     // set the site
     info.site = site;
@@ -515,11 +516,12 @@ class Api {
     await this.s3.deleteDomainFiles(domain);
 
     // pre-render one page and publish
-    await spawnService("cli", "release_website_zip_preview", [
+    const code = await spawnService("cli", "release_website_zip_preview", [
       toSite,
       "20",
       "domain:" + domain,
     ]);
+    if (code) return sendError(res, "Failed to deploy website", 500);
 
     // now also migrate the attached domains,
     // all we need to do is update local mapping,
@@ -1113,6 +1115,7 @@ class Api {
     server.listen(port, host, () => {
       console.log(`Server is running on http://${host}:${port}`);
     });
+    return new Promise(() => {});
   }
 
   public async reservePubkeyDomain(pubkey: string, domain: string, months = 3) {
@@ -1152,7 +1155,7 @@ export async function apiMain(argv: string[]) {
     const months = parseInt(argv?.[3]) || 3;
     console.log(pubkey, domain, months);
     return api.reservePubkeyDomain(pubkey, domain, months);
-  } else if (method === "api") {
+  } else if (method === "run") {
     const host = argv[1];
     const port = parseInt(argv[2]);
     return api.run(host, port);

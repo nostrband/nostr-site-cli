@@ -50,7 +50,7 @@ async function testBundle(dir: string) {
   });
   for (const file of files) {
     const stat = fs.statSync(assetsDir + "/" + file);
-    if (!stat.isFile()) return;
+    if (!stat.isFile()) continue;
     entries.push(file);
   }
 
@@ -137,7 +137,7 @@ async function testRender() {
   console.debug = () => {};
 
   const naddr =
-    "naddr1qqy8getnw3ekjar9qgs0jguk6age989y6efdf27n5xae528jwgcvw48k5wy8q5hayel609srqsqqqaesqyt8wumn8ghj7un9d3shjtnwdaehgu3wvfskueqpz3mhxue69uhhyetvv9ujuerpd46hxtnfduqs6amnwvaz7tmwdaejumr0ds094m6j";
+    "naddr1qqxxzmr2v9ar5dnzxqmnwvcpzamhxue69uhhyetvv9ujumnsw438qun09e3k7mgzyrh7t5fqmuxv9y86wjrj076943y8e2kngm20y2f6kp573uqlc5vczqcyqqq8wvqk5ukxe";
   const addr = parseAddr(naddr);
   const renderer = new NostrSiteRenderer();
   await renderer.start({
@@ -387,45 +387,46 @@ export async function testMain(argv: string[]) {
   console.log("test", argv);
 
   const method = argv[0];
-  if (method === "test_bundle") {
+  console.log("method", method);
+  if (method === "bundle") {
     // first scan assets folder, find all filenames
     const dir = argv[1];
     return testBundle(dir);
-  } else if (method === "test_render") {
+  } else if (method === "render") {
     return testRender();
-  } else if (method === "test_deploy") {
+  } else if (method === "deploy") {
     const pubkey = argv[1];
     const kinds = argv[2].split(",").filter((k) => k.trim() !== "");
     const hashtags = argv[3].split(",").filter((k) => k.trim() !== "");
     const theme = argv[4];
     return testDeploy(pubkey, kinds, hashtags, theme);
-  } else if (method === "test_prepare_site") {
+  } else if (method === "prepare_site") {
     const pubkey = argv[1];
     const kinds = (argv[2] || "").split(",").map((k) => parseInt(k));
     const hashtags = (argv[3] || "").split(",").filter((k) => k.trim() !== "");
     return testPrepareSite(pubkey, kinds, hashtags);
-  } else if (method === "test_rgb") {
+  } else if (method === "rgb") {
     const str = argv[1];
     return testRGB(str);
-  } else if (method === "test_session_token") {
+  } else if (method === "session_token") {
     const pubkey = argv[1];
     return testSessionToken(pubkey);
-  } else if (method === "test_zip_dir") {
+  } else if (method === "zip_dir") {
     const dir = argv[1];
     const path = argv[2];
     return zipSiteDir(dir, path);
-  } else if (method === "test_event") {
+  } else if (method === "event") {
     return testEvent();
-  } else if (method === "test_default_ip_route") {
+  } else if (method === "default_ip_route") {
     return testDefaultIpRoute();
-  } else if (method === "test_lb") {
+  } else if (method === "lb") {
     return testLB();
-  } else if (method === "test_outbox_relays") {
+  } else if (method === "outbox_relays") {
     const pubkey = argv[1];
     return testOutboxRelays(pubkey);
-  } else if (method === "test_sss") {
+  } else if (method === "sss") {
     testSSS();
-  } else if (method === "test_create_website") {
+  } else if (method === "create_website") {
     const dist = argv[1];
     const naddr = argv[2];
     const dir = argv[3];

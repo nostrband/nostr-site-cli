@@ -317,7 +317,7 @@ export async function cliMain(argv: string[]) {
   } else if (method === "deploy_site") {
     const domain = argv[1];
     const naddr = argv[2];
-    return deploySite(domain, naddr);
+    return deploySite(domain, naddr, argv.length >= 3 ? argv[3] : undefined);
   } else if (method.startsWith("reserve_site")) {
     const domain = argv[1];
     const naddr = argv[2];

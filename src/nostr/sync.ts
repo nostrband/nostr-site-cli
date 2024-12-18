@@ -76,7 +76,7 @@ export class EventSync {
     }
   }
 
-  addSite(naddr: string, site: NDKEvent, wasSite: NDKEvent, fetched?: number) {
+  addSite(naddr: string, site: NDKEvent, wasSite?: NDKEvent, fetched?: number) {
     console.log(
       "eventSync add site",
       naddr,
