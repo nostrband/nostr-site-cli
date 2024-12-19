@@ -11,6 +11,7 @@ global.Blob = Blob;
 
 import { cliMain } from "./services/cli";
 import { apiMain } from "./services/api";
+import { billingMain } from "./services/billing";
 import { ssrMain } from "./services/ssr";
 import { dmMain } from "./services/dm";
 import { testMain } from "./services/test";
@@ -25,6 +26,8 @@ try {
     cliMain(argv).then(() => process.exit());
   } else if (service === "api") {
     apiMain(argv).then(() => process.exit());
+  } else if (service === "billing") {
+    billingMain(argv).then(() => process.exit());
   } else if (service === "ssr") {
     ssrMain(argv).then(() => process.exit());
   } else if (service === "dm") {

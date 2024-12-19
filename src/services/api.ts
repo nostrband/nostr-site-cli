@@ -1,20 +1,11 @@
 import http from "http";
-import {
-  createSessionToken,
-  generateOTP,
-  parseSessionToken,
-} from "../auth/token";
+import { createSessionToken, generateOTP } from "../auth/token";
 import {
   AWS_GLOBAL_ACCEL_IPS,
-  CUSTOM_BUCKET,
-  DOMAINS_PERIOD,
-  KIND_DELETE,
   MAX_DOMAINS_PER_IP,
   MIN_POW,
   OTP_TTL,
   OUTBOX_RELAYS,
-  POW_PERIOD,
-  SESSION_TTL,
   STATUS_DEPLOYED,
   STATUS_RELEASED,
   STATUS_RESERVED,
@@ -31,7 +22,7 @@ import {
 import { Cert, SiteInfo, ValidSiteInfo } from "../common/types";
 import { AddressPointer } from "nostr-tools/lib/types/nip19";
 import { S3 } from "../aws/s3";
-import { DB } from "../db";
+import { ApiDB } from "../db/api";
 import { dnsResolveNoCache, spawnService } from "../common/utils";
 import NDK from "@nostr-dev-kit/ndk";
 import { Event, getPublicKey, nip19 } from "nostr-tools";
@@ -40,52 +31,18 @@ import { AsyncMutex } from "../common/async-mutex";
 import { ACM, ACMCert } from "../aws/acm";
 import { CF, CreatedDistribution } from "../aws/cf";
 import { LB } from "../aws/lb";
+import { RateLimiter } from "../server/rate-limit";
 // @ts-ignore
 import { fetchInboxRelays, tv, KIND_SITE, getProfileSlug } from "libnostrsite";
-
-async function sendReply(
-  res: http.ServerResponse,
-  reply: any,
-  status: number = 0
-) {
-  res.setHeader("Content-Type", "application/json");
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    res.req.headers["origin"] || "*"
-  );
-  res.setHeader("Access-Control-Allow-Methods", "*");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Authorization, X-NpubPro-Token, Content-Type"
-  );
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.writeHead(status || 200);
-  res.end(JSON.stringify(reply));
-}
-
-function getReqUrl(req: http.IncomingMessage) {
-  if (!req.url) throw new Error("No req url");
-  return new URL(req.url, "http://localhost");
-  //  return "https://" + req.headers["host"] + req.url;
-}
-
-async function sendError(
-  res: http.ServerResponse,
-  msg: string,
-  status: number
-) {
-  console.error("error", msg);
-  sendReply(res, { error: msg }, status);
-}
-
-function parseSession(req: http.IncomingMessage) {
-  const token = (req.headers["x-npubpro-token"] as string) || "";
-  const data = parseSessionToken(token);
-  console.log("token", token, "data", data);
-  if (!data) return undefined;
-  if (Date.now() / 1000 - data.timestamp > SESSION_TTL) return undefined;
-  return data.pubkey;
-}
+import {
+  getIp,
+  getReqUrl,
+  parseSession,
+  readBody,
+  sendError,
+  sendReply,
+  serverRun,
+} from "../server/utils";
 
 function canReserve(
   domain: string,
@@ -151,12 +108,6 @@ function isValidDomain(d: string) {
   );
 }
 
-function getIp(req: http.IncomingMessage) {
-  // @ts-ignore
-  // FIXME only check x-real-ip if real ip is our nginx!
-  return req.headers["x-real-ip"] || req.socket.address().address;
-}
-
 function isOwner(
   domain: string,
   admin: string,
@@ -178,31 +129,17 @@ function isOwner(
   return false;
 }
 
-async function readBody(req: http.IncomingMessage) {
-  return Promise.race([
-    new Promise<string>((ok) => {
-      let d = "";
-      req.on("data", (chunk) => (d += chunk));
-      req.on("end", () => ok(d));
-    }),
-    new Promise<string>((_, err) =>
-      setTimeout(() => err("Body read timeout"), 5000)
-    ),
-  ]);
-}
-
 class Api {
   private s3 = new S3();
   private acm = new ACM();
-  private db = new DB();
+  private db = new ApiDB();
   private cf = new CF();
   private lb = new LB();
   private mutex = new AsyncMutex();
+  private rl = new RateLimiter();
   private ndk = new NDK({
     explicitRelayUrls: [...OUTBOX_RELAYS],
   });
-  private ipPows = new Map();
-  private ipDomains = new Map<string, { domains: number; tm: number }>();
 
   constructor() {
     this.ndk.connect();
@@ -258,45 +195,6 @@ class Api {
     return domain;
   }
 
-  private getIpDomains(ip: string) {
-    let { domains: lastDomains = 0, tm = 0 } = this.ipDomains.get(ip) || {};
-    console.log("lastDomains", { ip, lastDomains, tm });
-    if (lastDomains) {
-      // refill: reduce threshold once per passed period
-      const age = Date.now() - tm;
-      const refill = Math.floor(age / DOMAINS_PERIOD);
-      lastDomains -= refill;
-    }
-
-    // if have lastPow - increment it and return
-    if (lastDomains && lastDomains >= 0) {
-      lastDomains = lastDomains + 1;
-    }
-
-    return lastDomains;
-  }
-
-  private getMinPow(ip: string) {
-    let minPow = MIN_POW;
-
-    // have a record for this ip?
-    let { pow: lastPow = 0, tm = 0 } = this.ipPows.get(ip) || {};
-    console.log("minPow", { ip, lastPow, tm });
-    if (lastPow) {
-      // refill: reduce the pow threshold once per passed period
-      const age = Date.now() - tm;
-      const refill = Math.floor(age / POW_PERIOD);
-      lastPow -= refill;
-    }
-
-    // if have lastPow - increment it and return
-    if (lastPow && lastPow >= minPow) {
-      minPow = lastPow + 1;
-    }
-
-    return minPow;
-  }
-
   private async deleteSite(info: ValidSiteInfo) {
     // mark as released for several days
     const expires = Date.now() + 7 * 24 * 60 * 60 * 1000;
@@ -316,7 +214,7 @@ class Api {
     if (!admin) return sendError(res, "Auth please", 401);
 
     const ip = getIp(req);
-    const ipd = this.getIpDomains(ip);
+    const ipd = this.rl.getIpDomains(ip);
     if (ipd > MAX_DOMAINS_PER_IP)
       return sendError(res, "Too many domains", 403);
 
@@ -341,7 +239,7 @@ class Api {
     if (!assignedDomain) return sendError(res, "Bad site '" + site + "'", 400);
 
     // update counter for this ip
-    this.ipDomains.set(ip, { domains: ipd, tm: Date.now() });
+    this.rl.setIpDomains(ip, ipd);
 
     sendReply(res, {
       domain: `${assignedDomain}.npub.pro`,
@@ -880,7 +778,7 @@ class Api {
     if (!npub) return sendError(res, "Specify npub", 400);
 
     const ip = getIp(req);
-    const minPow = this.getMinPow(ip);
+    const minPow = this.rl.getMinPow(ip);
     const { authorization } = req.headers;
     if (
       !(await verifyNip98AuthEvent({
@@ -910,7 +808,7 @@ class Api {
     console.log(Date.now(), "new token for ip", ip, tokenPubkey, token);
 
     // update minPow for this ip
-    this.ipPows.set(ip, { pow: minPow, tm: Date.now() });
+    this.rl.setMinPow(ip, minPow);
 
     sendReply(res, { token });
   }
@@ -923,7 +821,7 @@ class Api {
     // we don't ask for pow in this method,
     // but we use pow counter for per-ip throttling
     const ip = getIp(req);
-    const minPow = this.getMinPow(ip);
+    const minPow = this.rl.getMinPow(ip);
     if (minPow > MIN_POW + 10) return sendError(res, "Too many requests", 403);
 
     const relays = await fetchInboxRelays(this.ndk, [pubkey]);
@@ -938,7 +836,7 @@ class Api {
       relays,
     });
 
-    this.ipPows.set(ip, { pow: minPow, tm: Date.now() });
+    this.rl.setMinPow(ip, minPow);
 
     sendReply(res, {
       pubkey,
@@ -1065,6 +963,30 @@ class Api {
     });
   }
 
+  public async reservePubkeyDomain(pubkey: string, domain: string, months = 3) {
+    if (!domain) {
+      console.log("choosing domain");
+      const ndk = new NDK({
+        explicitRelayUrls: OUTBOX_RELAYS,
+      });
+      ndk.connect();
+      const profile = await fetchProfile(ndk, pubkey);
+      if (!profile) throw new Error("No profile for " + pubkey);
+
+      const slug = getProfileSlug(profile);
+      console.log("slug", slug);
+      if (!slug) throw new Error("No profile slug");
+      if (slug.length === 1) throw new Error("Short slug");
+
+      domain = slug;
+    }
+    console.log("reserving", domain, "for", pubkey, "months", months);
+
+    const expires = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
+    domain = await this.reserve(undefined, pubkey, domain, expires, true);
+    console.log("reserved", domain, "for", pubkey);
+  }
+
   private async requestListener(
     req: http.IncomingMessage,
     res: http.ServerResponse
@@ -1111,35 +1033,7 @@ class Api {
   }
 
   public async run(host: string, port: number) {
-    const server = http.createServer(this.requestListener.bind(this));
-    server.listen(port, host, () => {
-      console.log(`Server is running on http://${host}:${port}`);
-    });
-    return new Promise(() => {});
-  }
-
-  public async reservePubkeyDomain(pubkey: string, domain: string, months = 3) {
-    if (!domain) {
-      console.log("choosing domain");
-      const ndk = new NDK({
-        explicitRelayUrls: OUTBOX_RELAYS,
-      });
-      ndk.connect();
-      const profile = await fetchProfile(ndk, pubkey);
-      if (!profile) throw new Error("No profile for " + pubkey);
-
-      const slug = getProfileSlug(profile);
-      console.log("slug", slug);
-      if (!slug) throw new Error("No profile slug");
-      if (slug.length === 1) throw new Error("Short slug");
-
-      domain = slug;
-    }
-    console.log("reserving", domain, "for", pubkey, "months", months);
-
-    const expires = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
-    domain = await this.reserve(undefined, pubkey, domain, expires, true);
-    console.log("reserved", domain, "for", pubkey);
+    return serverRun(host, port, this.requestListener.bind(this));
   }
 }
 

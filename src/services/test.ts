@@ -383,6 +383,14 @@ async function testSSS() {
   console.log(comb === key); // => true
 }
 
+async function testBuyPro(site: string) {
+  const r = await fetchWithSession(
+    `http://localhost:8080/pro?site=${site}`,
+    "POST"
+  );
+  console.log("r", r);
+}
+
 export async function testMain(argv: string[]) {
   console.log("test", argv);
 
@@ -431,5 +439,8 @@ export async function testMain(argv: string[]) {
     const naddr = argv[2];
     const dir = argv[3];
     return testCreateWebsite(dist, naddr, dir);
+  } else if (method === "buy_pro") {
+    const site = argv[1];
+    return testBuyPro(site);
   }
 }
