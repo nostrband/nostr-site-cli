@@ -143,3 +143,21 @@ export function shuffleArray(array: any[]) {
     [array[i], array[j]] = [array[j], array[i]];
   }
 }
+
+export function now() {
+  return Math.floor(Date.now() / 1000);
+}
+
+export function calcPaidUntil(due_timestamp: number, period: string) {
+  const date = new Date(due_timestamp * 1000);
+  switch (period) {
+    case "1m": {
+      // overflow is REQUIRED to make sure we roll
+      // over to next year if current month is Dec
+      const ms = date.setMonth(date.getMonth() + 1);
+      return Math.floor(ms / 1000);
+    }
+    default:
+      throw new Error("Unknown period");
+  }
+}

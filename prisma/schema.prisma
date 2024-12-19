@@ -64,3 +64,53 @@ model Attach {
   timestamp BigInt
   @@unique([pubkey, site, domain])
 }
+
+// =======================================
+// Billing
+// =======================================
+
+model Prices {
+  id        String @id
+  type      String
+  plan      String
+  amount    Int
+  unit      String // i.e. 'sats' or 'usd'
+  period    String // i.e. '1m' or '30d'
+  group     String // i.e. 'test_A' or 'discounted'
+  timestamp Int // sec
+}
+
+model Services {
+  id        String @id
+  pubkey    String
+  price_id  String
+  object_id String // external, i.e. "site:naddrxxxx'
+  timestamp Int // sec
+  paid_until Int // sec
+}
+
+model Invoices {
+  id        String @id
+  pubkey    String
+  service_id String
+  timestamp Int
+  price_id  String // copied from service when invoice is created
+  amount    Int // copied from price when created
+  unit      String // same
+  period    String // same
+  due_timestamp Int // 0 if first invoice of the new subscription
+  paid_timestamp Int @default(0)
+  paid_order_id String @default("") // zaprite order id
+}
+
+model Orders {
+  id        String @id
+  pubkey    String
+  invoice_ids String // comma-separated
+  timestamp Int
+  checkout_url String // provided by zaprite
+  amount    Int // total from all invoices
+  unit      String // hm... some common denomination like 'sats'?
+  paid_timestamp Int @default(0)
+  error     String @default("")
+}

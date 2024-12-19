@@ -1,12 +1,13 @@
-import { PrismaClient } from "@prisma/client";
 import { Attach, Cert, DeployedDomain, SiteInfo } from "../common/types";
 import { STATUS_DEPLOYED } from "../common/const";
 import { parseNaddr } from "../nostr";
 import { AddressPointer } from "nostr-tools/lib/types/nip19";
 import { nip19 } from "nostr-tools";
+import { prisma } from "./prisma"
 
-export class DB {
-  private prisma: PrismaClient = new PrismaClient();
+export class ApiDB {
+
+  private prisma = prisma;
 
   constructor() {}
 

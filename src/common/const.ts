@@ -49,6 +49,8 @@ export const LB_LISTENER_ARN =
 export const NPUB_PRO_API = "https://api.npubpro.com";
 export const NPUB_PRO_DOMAIN = "npub.pro";
 
+export const ZAPRITE_API = "https://api.zaprite.com";
+
 export const OTP_TTL = 300000; // 5 minutes
 
 export const DEFAULT_BLOSSOM_SERVERS = [

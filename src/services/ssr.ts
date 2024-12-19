@@ -1,5 +1,5 @@
 import NDK, { NDKEvent } from "@nostr-dev-kit/ndk";
-import { DB } from "../db";
+import { ApiDB } from "../db/api";
 import { BLACKLISTED_RELAYS, SITE_RELAY } from "../common/const";
 import { EventSync } from "../nostr/sync";
 import { eventAddr, eventId, fetchRelayFilterSince } from "../nostr";
@@ -18,7 +18,7 @@ import { spawnService } from "../common/utils";
 import { DeployedDomain } from "../common/types";
 
 async function watch() {
-  const db = new DB();
+  const db = new ApiDB();
 
   const ndk = new NDK({
     explicitRelayUrls: [SITE_RELAY],
@@ -175,7 +175,7 @@ async function watch() {
 }
 
 async function render() {
-  const db = new DB();
+  const db = new ApiDB();
 
   const process = async (d: DeployedDomain, full = false) => {
     const render = async (paths: string[]) => {

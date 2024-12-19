@@ -34,9 +34,11 @@ import { zipSiteDir } from "../zip";
 import { generateOTP } from "../auth/token";
 import { dnsResolveNoCache, getMime, toArrayBuffer } from "../common/utils";
 import { S3 } from "../aws/s3";
-import { DB } from "../db";
+import { ApiDB } from "../db/api";
+import { BillingDB } from "../db/billing";
 import { Blossom } from "../blossom";
 import { prepareContentBuffer } from "../themes/utils";
+import { Price } from "../common/types";
 
 async function getThemeByName(name: string, ndk?: NDK) {
   ndk =
@@ -223,7 +225,7 @@ async function changeWebsiteUser(naddr: string, pubkey: string) {
 
 async function resyncLocalDb() {
   const s3 = new S3();
-  const db = new DB();
+  const db = new ApiDB();
 
   const keys = await s3.listBucketKeys(DOMAINS_BUCKET);
   console.log("keys", keys);
@@ -279,6 +281,11 @@ async function blossomUpload(server: string, path: string) {
     hash,
   });
   console.log("result", r);
+}
+
+async function createPrice(price: Price) {
+  const db = new BillingDB();
+  await db.createPrice({ ...price, timestamp: BigInt(Date.now()) });
 }
 
 export async function cliMain(argv: string[]) {
@@ -362,5 +369,8 @@ export async function cliMain(argv: string[]) {
     const domain = argv[1];
     const type = argv[2];
     return dnsResolveNoCache(domain, type);
+  } else if (method === "create_price") {
+    const price = JSON.parse(argv[1]);
+    return createPrice(price);
   }
 }

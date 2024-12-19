@@ -49,3 +49,49 @@ export interface Domain {
 export type DeployedDomain = Domain & {
   addr?: AddressPointer;
 };
+
+export interface Price {
+  id: string;
+  type: string;
+  plan: string;
+  amount: number;
+  unit: string;
+  period: string;
+  group: string;
+  timestamp: bigint;
+}
+
+export interface Service {
+  id: string;
+  pubkey: string;
+  price_id: string;
+  object_id: string;
+  timestamp: number;
+  paid_until: number;
+}
+
+export interface Invoice {
+  id: string;
+  pubkey: string;
+  service_id: string;
+  timestamp: number;
+  price_id: string;
+  amount: number;
+  unit: string;
+  period: string;
+  due_timestamp: number;
+  paid_timestamp: number;
+  paid_order_id: string;
+}
+
+export interface Order {
+  id: string;
+  pubkey: string;
+  invoice_ids: string;
+  timestamp: number;
+  amount: number;
+  unit: string;
+  checkout_url: string;
+  paid_timestamp: number;
+  error: string;
+}
