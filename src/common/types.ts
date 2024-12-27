@@ -58,7 +58,7 @@ export interface Price {
   unit: string;
   period: string;
   group: string;
-  timestamp: bigint;
+  timestamp: number;
 }
 
 export interface Service {

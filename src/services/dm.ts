@@ -160,7 +160,7 @@ async function createZapSplit({
   return event.id;
 }
 
-async function sendValue4ValueDM(targetPubkey: string) {
+async function sendDM(type: string, targetPubkey: string) {
   await ensureAuth();
 
   const pubkey = cliPubkey;
@@ -170,40 +170,68 @@ async function sendValue4ValueDM(targetPubkey: string) {
   });
   await ndk.connect();
 
-  const zapSplitId = await createZapSplit({ pubkey: targetPubkey, ndk });
-  const nevent = nip19.neventEncode({ id: zapSplitId, relays: DEFAULT_RELAYS });
-  // convert the last char to percent-encoded version to make sure clients don't try to
-  // convert this nevent string into an event preview (nostrudel wtf??)
-  const neventParam =
-    nevent.slice(0, nevent.length - 1) +
-    "%" +
-    nevent.charCodeAt(nevent.length - 1).toString(16);
-  console.log("neventParam", neventParam);
+  let message = "";
+  if (type === "value4value") {
+    const zapSplitId = await createZapSplit({ pubkey: targetPubkey, ndk });
+    const nevent = nip19.neventEncode({
+      id: zapSplitId,
+      relays: DEFAULT_RELAYS,
+    });
+    // convert the last char to percent-encoded version to make sure clients don't try to
+    // convert this nevent string into an event preview (nostrudel wtf??)
+    const neventParam =
+      nevent.slice(0, nevent.length - 1) +
+      "%" +
+      nevent.charCodeAt(nevent.length - 1).toString(16);
+    console.log("neventParam", neventParam);
 
-  const updates = `Here is a summary of updates we released since the launch:\n
-  - custom domains can be attached to your sites;\n
-  - pinned/featured posts;\n
-  - several new themes;\n
-  - visitors on your sites can send all kinds of reactions, highlights, quotes, comments, can follow the post author, can send them DMs;\n
-  - a better designed admin panel for your convenience;\n
-  - multiple authors can be added to your site;\n
-  - customize your main call-to-action (Zap, Like, etc);\n
-  - homepage settings (hashtags, kinds);\n
-  - geohashes: shows a map under posts with a geohash;\n
-  - RSS feeds on your site, usable as a podcast feed;\n
-  - an improved smooth signup flow for your visitors;\n
-  - many bug fixes and small improvements;
-  \n\n`;
+    const updates = `Here is a summary of updates we released since the launch:\n
+    - custom domains can be attached to your sites;\n
+    - pinned/featured posts;\n
+    - several new themes;\n
+    - visitors on your sites can send all kinds of reactions, highlights, quotes, comments, can follow the post author, can send them DMs;\n
+    - a better designed admin panel for your convenience;\n
+    - multiple authors can be added to your site;\n
+    - customize your main call-to-action (Zap, Like, etc);\n
+    - homepage settings (hashtags, kinds);\n
+    - geohashes: shows a map under posts with a geohash;\n
+    - RSS feeds on your site, usable as a podcast feed;\n
+    - an improved smooth signup flow for your visitors;\n
+    - many bug fixes and small improvements;
+    \n\n`;
 
-  const message = `Hello!\n\n
-Looks like you've been using Npub.pro for a while, and we are very happy to serve you!\n\n
-Our website publishing tools are free to use, but not free to create and improve. If you find them valuable, consider supporting us in the spirit of #Value4Value.\n\n
-Here is a convenient link with a zap-split, directing 50% of your tips to several contributors that made your websites work: https://zapper.fun/zap?id=${neventParam}\n\n
-${updates}
-Thank you for your support!\n\n
-- Npub.pro team.
+    const message = `Hello!\n\n
+  Looks like you've been using Npub.pro for a while, and we are very happy to serve you!\n\n
+  Our website publishing tools are free to use, but not free to create and improve. If you find them valuable, consider supporting us in the spirit of #Value4Value.\n\n
+  Here is a convenient link with a zap-split, directing 50% of your tips to several contributors that made your websites work: https://zapper.fun/zap?id=${neventParam}\n\n
+  ${updates}
+  Thank you for your support!\n\n
+  - Npub.pro team.
+  (If you don't like this message, please reply and let us know)\n\n
+  `;
+  } else if (type === "use_blog") {
+    message = `Hello!\n
+Thank you for being an early adopter of npub.pro!\n
+We think the best way to learn new tools is to follow the early adopters. There is an infinite number of ways to use a nostr-website, and YOU can help others figure out the possibilities and best practices.\n
+Would you be interested in writing a long-form article about your experience with npub.pro? Why did you create your site? How are you using it? What you love, and what's missing?\n
+We are happy to zap you and will cross-post your article on our blog and share it with our community. Your story might inspire others to start their content creation journey!\n
+If you’re interested or have any questions feel free to reach out. We’d love to hear from you!\n
+Best regards,
+Npub.pro Team\n
 (If you don't like this message, please reply and let us know)\n\n
 `;
+  } else if (type === "themes_feedback") {
+    message = `Hello!\n
+We wish you a Merry Christmas and Happy New Year! It's a pleasure to serve you with Npub.pro!\n
+Thinking of Christmas gifts, we decided to offer you something special...\n
+How about some improvements to your website theme?\n
+Let us know what's wrong with your theme, and we'll try to help you fix the issue. Also, don't hesitate to send us any general feedback about our themes - which ones you love and why?\n
+Themes are a very important element of making your website look special, and we are looking forward to improving them with your help!\n 
+Best regards,
+Npub.pro Team\n
+(If you don't like this message, please reply and let us know)\n\n
+`;
+  }
 
   const dm = new NDKEvent(ndk, {
     kind: 4,
@@ -235,8 +263,9 @@ export async function dmMain(argv: string[]) {
   if (method === "create_zap_split") {
     const pubkey = argv[1];
     return createZapSplit({ pubkey });
-  } else if (method === "send_v4v_dm") {
-    const pubkey = argv[1];
-    return sendValue4ValueDM(pubkey);
+  } else if (method === "send_dm") {
+    const type = argv[1];
+    const pubkey = argv[2];
+    return sendDM(type, pubkey);
   }
 }

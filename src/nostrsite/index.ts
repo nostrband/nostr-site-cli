@@ -147,6 +147,7 @@ export async function renderWebsite(
       fs.writeFileSync(`${dir}/sitemap.txt`, sitemap, { encoding: "utf-8" });
     }
 
+    // FIXME later on read from file events!
     const robots = `
   User-agent: *
   Allow: /
@@ -198,14 +199,31 @@ export async function renderWebsite(
     });
 
     // nostr.json
-    fs.mkdirSync(`${dir}/.well-known`, { recursive: true });
-    const json = {
+    let nostrJson = JSON.stringify({
       names: {
         _: site.admin_pubkey,
       },
       relays: {},
-    };
-    fs.writeFileSync(`${dir}/.well-known/nostr.json`, JSON.stringify(json));
+    });
+    const nostrJsonEvent = await renderer.fetchSiteFile(
+      "/.well-known/nostr.json"
+    );
+    if (nostrJsonEvent) {
+      try {
+        JSON.parse(nostrJsonEvent.content);
+        nostrJson = nostrJsonEvent.content;
+      } catch (e) {
+        console.error(
+          "Invalid nostr.json file event",
+          e,
+          nostrJsonEvent.content
+        );
+      }
+    }
+
+    // nostr.json
+    fs.mkdirSync(`${dir}/.well-known`, { recursive: true });
+    fs.writeFileSync(`${dir}/.well-known/nostr.json`, nostrJson);
 
     // not-found handler.
     // we don't know if object actually doesn't exist or

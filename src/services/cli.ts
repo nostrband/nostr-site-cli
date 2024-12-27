@@ -1,3 +1,4 @@
+import fs from "fs";
 import NDK, { NDKEvent, NDKRelaySet } from "@nostr-dev-kit/ndk";
 import { releaseWebsite, renderWebsite } from "../nostrsite";
 import {
@@ -14,11 +15,12 @@ import {
   NostrParser,
   NostrStore,
   KIND_SITE,
+  KIND_SITE_FILE,
   parseAddr,
   fetchNostrSite,
   // @ts-ignore
 } from "libnostrsite";
-import { eventId } from "../nostr";
+import { eventId, parseNaddr } from "../nostr";
 import { cliPubkey, cliSigner, ensureAuth } from "../auth/cli-auth";
 import { nip19 } from "nostr-tools";
 import {
@@ -32,7 +34,12 @@ import { bytesToHex } from "@noble/hashes/utils";
 import { randomBytes } from "crypto";
 import { zipSiteDir } from "../zip";
 import { generateOTP } from "../auth/token";
-import { dnsResolveNoCache, getMime, toArrayBuffer } from "../common/utils";
+import {
+  dnsResolveNoCache,
+  getMime,
+  now,
+  toArrayBuffer,
+} from "../common/utils";
 import { S3 } from "../aws/s3";
 import { ApiDB } from "../db/api";
 import { BillingDB } from "../db/billing";
@@ -285,7 +292,41 @@ async function blossomUpload(server: string, path: string) {
 
 async function createPrice(price: Price) {
   const db = new BillingDB();
-  await db.createPrice({ ...price, timestamp: BigInt(Date.now()) });
+  await db.createPrice({ ...price, timestamp: now() });
+}
+
+async function publishNostrJson(siteId: string) {
+  await ensureAuth();
+
+  const ndk = new NDK({
+    explicitRelayUrls: [...OUTBOX_RELAYS, SITE_RELAY],
+  });
+  ndk.connect();
+
+  const addr = parseNaddr(siteId);
+  const s_tag = `${KIND_SITE}:${addr!.pubkey}:${addr!.identifier}`;
+  const d_tag = `${"/.well-known/nostr.json"}:${s_tag}`;
+
+  // read from stdin
+  const jsonString = fs.readFileSync(0).toString();
+  const json = JSON.parse(jsonString);
+  const event = new NDKEvent(ndk, {
+    kind: KIND_SITE_FILE,
+    pubkey: cliPubkey,
+    content: JSON.stringify(json),
+    created_at: now(),
+    tags: [
+      ["d", d_tag],
+      ["s", s_tag],
+    ],
+  });
+
+  await event.sign(cliSigner);
+  console.log("signed", event.rawEvent());
+
+  const relays = await fetchOutboxRelays(ndk, [addr!.pubkey]);
+  const r = await event.publish(NDKRelaySet.fromRelayUrls(relays, ndk));
+  console.log("published at", r);
 }
 
 export async function cliMain(argv: string[]) {
@@ -372,5 +413,8 @@ export async function cliMain(argv: string[]) {
   } else if (method === "create_price") {
     const price = JSON.parse(argv[1]);
     return createPrice(price);
+  } else if (method === "publish_nostr_json") {
+    const siteId = argv[1];
+    return publishNostrJson(siteId);
   }
 }

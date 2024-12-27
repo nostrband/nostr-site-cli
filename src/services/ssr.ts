@@ -6,6 +6,7 @@ import { eventAddr, eventId, fetchRelayFilterSince } from "../nostr";
 import {
   KIND_SITE,
   KIND_PINNED_TO_SITE,
+  KIND_SITE_SUBMIT,
   tv,
   NostrParser,
   parseAddr,
@@ -101,47 +102,68 @@ async function watch() {
     const fetchedTm = Math.floor(Date.now() / 1000) - SYNC_BUFFER_SEC;
     const newEvents = await eventSync.process();
     for (const e of newEvents) {
+      // convert to note/naddr
       const id = eventId(e);
       const existing = events.get(id);
-      if (!existing || existing.created_at! < e.created_at!) {
-        events.set(id, e);
+      if (existing && existing.created_at! >= e.created_at!) continue;
 
-        const siteNaddrs = eventSync.getAuthorSites(e.pubkey);
-        console.log("scheduling new event", id, "sites", siteNaddrs.length);
-        for (const naddr of siteNaddrs) {
-          const s = sites.get(naddr);
-          if (!s) {
-            console.log("no site for", naddr);
+      events.set(id, e);
+
+      const siteNaddrs = eventSync.getAuthorSites(e.pubkey);
+      console.log("scheduling new event", id, "sites", siteNaddrs.length);
+      for (const naddr of siteNaddrs) {
+        const s = sites.get(naddr);
+        if (!s) {
+          console.log("no site for", naddr);
+          continue;
+        }
+        if (!s.addr) throw new Error("No site addr");
+
+        const d = getDomain(s.addr);
+        if (!d) {
+          console.log("no domain for", s.addr);
+          continue;
+        }
+
+        const url = tv(s, "r");
+        const parser = new NostrParser(url);
+
+        // full rerender for changed pins
+        if (e.kind === KIND_PINNED_TO_SITE) {
+          const d_tag = `${KIND_SITE}:${s.addr.pubkey}:${s.addr.identifier}`;
+          if (tv(e, "d") !== d_tag) {
+            console.log("rerender of pins skip for", d.domain);
             continue;
           }
-          if (!s.addr) throw new Error("No site addr");
-
-          const d = getDomain(s.addr);
-          if (!d) {
-            console.log("no domain for", s.addr);
+          console.log(
+            "scheduling rerender for changed pins",
+            d.domain,
+            e.rawEvent()
+          );
+          await db.setRerenderDomain(d.domain, e.created_at!);
+        } else if (e.kind === KIND_SITE_SUBMIT) {
+          const s_tag = `${KIND_SITE}:${s.addr.pubkey}:${s.addr.identifier}`;
+          if (tv(e, "s") !== s_tag) {
+            console.log("rerender of submits skip for", d.domain);
             continue;
           }
 
-          // full rerender for changed pins
-          if (e.kind === KIND_PINNED_TO_SITE) {
-            const d_tag = `${KIND_SITE}:${s.addr.pubkey}:${s.addr.identifier}`;
-            if (tv(e, "d") !== d_tag) {
-              console.log("rerender of pins skip for", d.domain);
-              continue;
-            }
+          const submit = await parser.parseSubmitEvent(e);
+          if (submit) {
             console.log(
-              "scheduling rerender for changed pins",
-              d.domain,
-              e.rawEvent()
+              "scheduling new submit",
+              submit.eventAddress,
+              "site",
+              naddr,
+              "domain",
+              d.domain
             );
-            await db.setRerenderDomain(d.domain, e.created_at!);
-            continue;
-          }
 
-          // load to check if event matches our filters
+            await db.addEventToQueue(d.domain, submit.eventAddress);
+          }
+        } else {
           if (!s.store) {
-            const url = tv(s, "r");
-            const parser = new NostrParser(url);
+            // load to check if event matches our filters
             const addr = parseAddr(naddr);
             const site = parser.parseSite(addr, s);
             parser.setSite(site);

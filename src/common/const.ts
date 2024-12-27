@@ -90,6 +90,14 @@ export const BLACKLISTED_RELAYS = [
   "wss://nostr.mutinywallet.com",
   "wss://brb.io",
   "wss://relay.current.fyi",
+  "wss://localhost/",
+  "wss://localhost:",
+  "ws://localhost/",
+  "ws://localhost:",
+  "wss://127.0.0.1/",
+  "wss://127.0.0.1:",
+  "ws://127.0.0.1/",
+  "ws://127.0.0.1:",
 ];
 
 export const BROADCAST_RELAYS = ["wss://nostr.mutinywallet.com/"];

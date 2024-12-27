@@ -4799,6 +4799,8 @@ async function sendDM(type, targetPubkey) {
   });
   await ndk.connect();
 
+FIXME add unsubscribers.txt!!!
+
   let message = "";
   if (type === "value4value") {
     const zapSplitId = await createZapSplit({ pubkey: targetPubkey, ndk });

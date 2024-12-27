@@ -103,12 +103,13 @@ export class S3 {
     );
     console.warn("files", files);
 
+    const noCacheFiles = ["index.html", ".well-known/nostr.json"];
     const keys: string[] = [];
     for (const f of files) {
       const content = fs.readFileSync(`${dir}/${f}`);
       const key = `${domain}/${f}`;
       keys.push(key);
-      const CacheControl = f === "index.html" ? "no-cache" : undefined;
+      const CacheControl = noCacheFiles.includes(f) ? "no-cache" : undefined;
       console.warn("uploading", f, "to", key, "cache control", CacheControl);
       const cmd = new PutObjectCommand({
         Bucket: bucketName,
