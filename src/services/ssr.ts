@@ -249,6 +249,7 @@ async function render() {
 
       let lastId = 0;
       const paths = ["/"];
+      // FIXME also authors and hashtags!
       for (const e of events) {
         if (e.id > lastId) lastId = e.id;
         paths.push(`/post/${e.eventId}`);

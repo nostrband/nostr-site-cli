@@ -32,8 +32,15 @@ import { ACM, ACMCert } from "../aws/acm";
 import { CF, CreatedDistribution } from "../aws/cf";
 import { LB } from "../aws/lb";
 import { RateLimiter } from "../server/rate-limit";
-// @ts-ignore
-import { fetchInboxRelays, tv, KIND_SITE, getProfileSlug } from "libnostrsite";
+import {
+  fetchInboxRelays,
+  tv,
+  KIND_SITE,
+  KIND_SITE_SUBMIT,
+  getProfileSlug,
+  parseATag,
+  // @ts-ignore
+} from "libnostrsite";
 import {
   getIp,
   getReqUrl,
@@ -612,7 +619,7 @@ class Api {
       const cert = await this.acm.requestCert(domain, admin);
 
       const data: Cert = {
-        id,
+        id: cert.CertificateArn!,
         domain,
         pubkey: "",
         timestamp: Date.now(),
@@ -936,6 +943,53 @@ class Api {
     }
   }
 
+  public async apiSign(req: http.IncomingMessage, res: http.ServerResponse) {
+    if (req.method !== "POST") return sendError(res, "Use post", 400);
+
+    const admin = parseSession(req);
+    if (!admin) return sendError(res, "Auth please", 401);
+
+    const body = await readBody(req);
+
+    let event: Event | undefined;
+    try {
+      event = JSON.parse(body);
+    } catch (e) {
+      console.log("Bad event", body);
+    }
+    if (!event) return sendError(res, "Bad event", 400);
+
+    const key = getServerKey();
+    const serverPubkey = getPublicKey(key);
+
+    if (event.pubkey !== serverPubkey)
+      return sendError(res, "Wrong event pubkey", 400);
+    if (tv(event, "u") !== admin)
+      return sendError(res, "Wrong admin pubkey", 400);
+    if (event.kind !== KIND_SITE_SUBMIT)
+      return sendError(res, "Wrong kind", 400);
+    if (!Array.isArray(event.tags)) return sendError(res, "Wrong tags", 400);
+
+    const s_tag = tv(event, "s");
+    if (!s_tag.trim()) return sendError(res, "No d-tag", 400);
+    const addr = parseATag(s_tag);
+    if (addr.kind !== KIND_SITE || addr.pubkey !== serverPubkey)
+      return sendError(res, "Wrong s-tag", 400);
+
+    const existing = await this.db.getSite(addr.identifier);
+    if (!existing) return sendError(res, "No site", 400);
+    if (existing.pubkey !== admin) return sendError(res, "Not your site", 403);
+
+    // reset to ensure it's set to current timestamp
+    event.created_at = 0;
+
+    // try to sign event, will throw if it's invalid
+    const ne = await signEvent(this.ndk, event, key);
+    sendReply(res, {
+      event: ne.rawEvent(),
+    });
+  }
+
   public async apiDeleteSiteEvent(
     req: http.IncomingMessage,
     res: http.ServerResponse
@@ -1014,6 +1068,8 @@ class Api {
         await this.apiAuth(req, res);
       } else if (req.url.startsWith("/otp")) {
         await this.apiOTP(req, res);
+      } else if (req.url.startsWith("/sign")) {
+        await this.apiSign(req, res);
       } else if (req.url.startsWith("/site")) {
         if (req.method === "DELETE") await this.apiDeleteSiteEvent(req, res);
         else await this.apiCreateSite(req, res);

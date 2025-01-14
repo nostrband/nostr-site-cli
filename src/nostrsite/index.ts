@@ -100,8 +100,9 @@ export async function renderWebsite(
       ? (onlyPathsOrLimit as number)
       : (onlyPathsOrLimit as string[]).length
     : 0;
-  const onlyPaths =
-    !limit && onlyPathsOrLimit ? (onlyPathsOrLimit as string[]) : [];
+  const onlyPaths = !Number.isInteger(onlyPathsOrLimit)
+    ? (onlyPathsOrLimit as string[])
+    : [];
   console.log("renderWebsite", dir, naddr, limit, onlyPaths);
 
   // disable debug logging
@@ -123,26 +124,22 @@ export async function renderWebsite(
     });
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
-    // sitemap
-    const sitemapPaths: string[] = await renderer.getSiteMap(limit);
-    const paths = sitemapPaths.filter(
-      (p) => !onlyPaths.length || onlyPaths.includes(p)
-    );
-    console.warn("paths", paths);
-    if (paths.length < onlyPaths.length)
-      console.warn(
-        "BAD paths",
-        paths,
-        "expected",
-        onlyPaths,
-        "sitemap",
-        sitemapPaths
-      );
-
     const site = renderer.settings!;
+    // convert onlyPaths to actual paths:
+    // parse each path as route, find matching event by id or slug,
+    // return actual path.
+    const paths: string[] = [];
+    for (const p of onlyPaths) {
+      const path = await renderer.normalizePath(p);
+      paths.push(path);
+    }
+    console.warn("only paths normalized", paths, "input", onlyPaths);
 
     // only write sitemap if we've loaded the whole site
     if (!limit) {
+      const sitemapPaths: string[] = await renderer.getSiteMap(limit);
+      paths.push(...sitemapPaths);
+
       const sitemap = sitemapPaths.map((p) => `${site.origin}${p}`).join("\n");
       fs.writeFileSync(`${dir}/sitemap.txt`, sitemap, { encoding: "utf-8" });
     }
@@ -239,6 +236,16 @@ export async function renderWebsite(
     // render using hbs and replace document.html
     for (const p of paths) {
       const { result, context } = await renderer.render(p);
+      // 404? event deleted - add path for deletion? fuck :(
+      // we can't normalize path without loading an event,
+      // and event is deleted! so we don't really know what to delete now!
+      if (context.context.includes("error")) {
+        // FIXME DELETED EVENT!!!
+        // hmm... doesn't our ssr uploaded delete all existing files
+        // after uploading the new render?
+
+        continue;
+      }
       let file = p;
       if (file === "/") file = "/index";
       else if (file.endsWith("/")) file = file.substring(0, file.length - 1);
