@@ -65,6 +65,15 @@ model Attach {
   @@unique([pubkey, site, domain])
 }
 
+model Data {
+  id        Int  @id @default(autoincrement())
+  pubkey    String
+  key       String
+  value     String
+  timestamp BigInt
+  @@unique([pubkey, key])
+}
+
 // =======================================
 // Billing
 // =======================================
@@ -87,6 +96,7 @@ model Services {
   object_id String // external, i.e. "site:naddrxxxx'
   timestamp Int // sec
   paid_until Int // sec
+  cancel_tm Int @default(0) // sec
 }
 
 model Invoices {

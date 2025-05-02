@@ -1,10 +1,13 @@
 import fs from "fs";
-import NDK, { NDKEvent, NDKRelaySet } from "@nostr-dev-kit/ndk";
+import NDK, { NDKEvent, NDKRelaySet, NDKUser } from "@nostr-dev-kit/ndk";
 import { releaseWebsite, renderWebsite } from "../nostrsite";
 import {
   DOMAINS_BUCKET,
+  KIND_LONG_NOTE,
+  KIND_NOTE,
   NPUB_PRO_DOMAIN,
   OUTBOX_RELAYS,
+  SEARCH_RELAYS,
   SITE_RELAY,
 } from "../common/const";
 import {
@@ -13,22 +16,31 @@ import {
   prepareSiteByContent,
   fetchOutboxRelays,
   NostrParser,
+  isImageUrl,
+  isVideoUrl,
   NostrStore,
   KIND_SITE,
   KIND_SITE_FILE,
+  KIND_OLAS,
+  KIND_VIDEO_HORIZONTAL,
+  KIND_VIDEO_VERTICAL,
   parseAddr,
   fetchNostrSite,
+  fetchEvents,
   // @ts-ignore
 } from "libnostrsite";
 import { eventId, parseNaddr } from "../nostr";
 import { cliPubkey, cliSigner, ensureAuth } from "../auth/cli-auth";
-import { nip19 } from "nostr-tools";
+import { generatePrivateKey, nip19 } from "nostr-tools";
 import {
+  checkAttachedDomain,
   checkDomain,
   deploySite,
   getAdminSessionToken,
+  getData,
   getSessionToken,
   reserveSite,
+  setData,
 } from "../client";
 import { bytesToHex } from "@noble/hashes/utils";
 import { randomBytes } from "crypto";
@@ -44,8 +56,18 @@ import { S3 } from "../aws/s3";
 import { ApiDB } from "../db/api";
 import { BillingDB } from "../db/billing";
 import { Blossom } from "../blossom";
+import {
+  verifierCreateEmailCommandToken,
+  publishEmailRequest,
+  fetchEmailSubs,
+  publishEmailConfirm,
+  verifierStartEmailConfirmDaemon,
+  createEmailNewsletter,
+} from "../email/email";
 import { prepareContentBuffer } from "../themes/utils";
 import { Price } from "../common/types";
+import { PrivateKeySigner } from "../nostr/private-key-signer";
+import { publishTheme } from "../themes";
 
 async function getThemeByName(name: string, ndk?: NDK) {
   ndk =
@@ -329,15 +351,95 @@ async function publishNostrJson(siteId: string) {
   console.log("published at", r);
 }
 
+async function detectContentType(pubkey: string) {
+  const ndk = new NDK({
+    explicitRelayUrls: [...OUTBOX_RELAYS, ...SEARCH_RELAYS],
+  });
+  ndk.connect();
+
+  const fetch = async (kinds: number[], min: number) => {
+    return await fetchEvents(
+      ndk,
+      {
+        authors: [pubkey],
+        kinds,
+        limit: min,
+      },
+      SEARCH_RELAYS,
+      1000
+    );
+  };
+
+  const has = async (kinds: number[], min: number) => {
+    return (await fetch(kinds, min)).size >= min;
+  };
+
+  if (await has([KIND_LONG_NOTE], 1)) return "blog";
+  if (await has([KIND_OLAS], 10)) return "photo";
+  if (await has([KIND_VIDEO_HORIZONTAL, KIND_VIDEO_VERTICAL], 10))
+    return "video";
+
+  const notes: Set<NDKEvent> = await fetch([KIND_NOTE], 100);
+  console.log("notes", notes.size);
+  const roots = [...notes].filter(
+    (n) =>
+      !n.tags.find(
+        (t) =>
+          t.length >= 4 && (t[0] === "a" || t[0] === "e") && t[3] === "root"
+      )
+  );
+  console.log("roots", roots.length);
+
+  // nothing?
+  if (!roots.length) return "";
+
+  // not enough sample size, but still something?
+  if (roots.length < 10) return "note";
+
+  const parser = new NostrParser();
+
+  // video has priority in notes
+  const video =
+    roots.filter((r) => {
+      const links: string[] = parser.parseLinks(r);
+      return links.find((l) => isVideoUrl(l, r));
+    }).length >= 10;
+  if (video) return "video";
+
+  const photo =
+    roots.filter((r) => {
+      const links: string[] = parser.parseLinks(r);
+      return links.find((l) => isImageUrl(l, r));
+    }).length >= 10;
+  if (photo) return "photo";
+
+  // default
+  return "note";
+}
+
 export async function cliMain(argv: string[]) {
   console.log("cli", argv);
 
   const method = argv[0];
-  if (method === "render_website") {
+  if (method.startsWith("publish_theme")) {
+    const dir = argv[1];
+    const latest = method.includes("latest");
+    const reupload = method.includes("reupload");
+    const includeFonts = method.includes("include_fonts");
+    return publishTheme(dir, {
+      latest,
+      reupload,
+      includeFonts,
+    });
+  } if (method === "render_website") {
     const dir = argv[1];
     const naddr = argv[2];
-    const limit = argv.length > 3 ? parseInt(argv[3]) : 0;
-    return renderWebsite(dir, naddr, limit);
+    let paths: string[] | number = [];
+    for (let i = 3; i < argv.length; i++)
+      paths.push(argv[i]);
+    if (paths.length === 1 && !paths[0].startsWith("/"))
+      paths = parseInt(paths[0]);
+    return renderWebsite(dir, naddr, paths);
   } else if (method.startsWith("release_website")) {
     const naddr = argv[1];
     const zip = method.includes("zip");
@@ -390,6 +492,10 @@ export async function cliMain(argv: string[]) {
     const domain = argv[1];
     const site = argv[2];
     return checkDomain(domain, site);
+  } else if (method === "check_attached_domain") {
+    const domain = argv[1];
+    const site = argv[2];
+    return checkAttachedDomain(domain, site);
   } else if (method === "change_website_user") {
     const siteId = argv[1];
     const pubkey = argv[2];
@@ -416,5 +522,100 @@ export async function cliMain(argv: string[]) {
   } else if (method === "publish_nostr_json") {
     const siteId = argv[1];
     return publishNostrJson(siteId);
+  } else if (method === "create_email_command_token") {
+    const newsletterId = argv[1];
+    const email = argv[2];
+    const action = argv[3];
+    if (action !== "sub" && action !== "unsub") throw new Error("Bad type");
+    const c = await verifierCreateEmailCommandToken(
+      newsletterId,
+      email,
+      action
+    );
+    console.log(c);
+    return;
+  } else if (method === "publish_email_request") {
+    const newsletterId = argv[1];
+    const email = argv[2];
+    const action = argv[3];
+    if (action !== "sub" && action !== "unsub") throw new Error("Bad type");
+    await publishEmailRequest(newsletterId, email, action);
+    return;
+  } else if (method === "publish_email_confirm") {
+    const pubkey = argv[1];
+    const token = argv[2];
+    await publishEmailConfirm(pubkey, token);
+    return;
+  } else if (method === "decrypt_nip44") {
+    const pubkey = argv[1];
+    const data = argv[2];
+    await ensureAuth();
+    console.log(
+      "from",
+      pubkey,
+      "data",
+      data,
+      "to",
+      (await cliSigner.user()).pubkey
+    );
+    console.log(
+      await cliSigner.decryptNip44(new NDKUser({ hexpubkey: pubkey }), data)
+    );
+    return;
+  } else if (method === "encrypt_nip44" || method === "encrypt_nip44_anon") {
+    const pubkey = argv[1];
+    const data = argv[2];
+    const anon = method.includes("anon");
+    if (!anon) await ensureAuth();
+    const signer = anon
+      ? new PrivateKeySigner(generatePrivateKey())
+      : cliSigner;
+    console.log("pubkey", (await signer.user()).pubkey);
+    console.log(
+      await signer.encryptNip44(new NDKUser({ hexpubkey: pubkey }), data)
+    );
+    return;
+  } else if (method === "test_nip44") {
+    const signer1 = new PrivateKeySigner(generatePrivateKey());
+    const signer2 = new PrivateKeySigner(generatePrivateKey());
+    const pubkey1 = (await signer1.user()).pubkey;
+    const pubkey2 = (await signer2.user()).pubkey;
+    console.log("pubkeys", pubkey1, pubkey2);
+    const data = "test";
+    const d = await signer1.encryptNip44(
+      new NDKUser({ hexpubkey: pubkey2 }),
+      data
+    );
+    const res = await signer2.decryptNip44(
+      new NDKUser({ hexpubkey: pubkey1 }),
+      d
+    );
+    console.log("data", data, "res", res);
+    return;
+  } else if (method === "fetch_email_subs") {
+    return await fetchEmailSubs();
+  } else if (method === "start_email_confirm_daemon") {
+    const newsletterId = argv[1];
+    return await verifierStartEmailConfirmDaemon(newsletterId);
+  } else if (method === "create_email_newsletter") {
+    const id = argv[1];
+    const title = argv[2];
+    const description = argv[3];
+    const icon = argv[4];
+    const verifier = argv[5];
+    await createEmailNewsletter(id, title, description, icon, verifier);
+    return;
+  } else if (method === "detect_content_type") {
+    const pubkey = argv[1];
+    const type = await detectContentType(pubkey);
+    console.log("pubkey", pubkey, "type", type);
+    return;
+  } else if (method === "set_data") {
+    const key = argv[1];
+    const value = argv[2];
+    return setData(key, value);
+  } else if (method === "get_data") {
+    const key = argv[1];
+    return getData(key);
   }
 }

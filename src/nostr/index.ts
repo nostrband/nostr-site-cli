@@ -360,3 +360,7 @@ export function eventId(e: Event | NDKEvent) {
     return nip19.noteEncode(e.id);
   }
 }
+
+export function now() {
+  return Math.floor(Date.now() / 1000);
+}

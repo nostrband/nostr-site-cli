@@ -19,20 +19,45 @@ export class BillingDB {
 
   public async listServices(where: { pubkey: string }): Promise<Service[]> {
     return await this.prisma.services.findMany({
-      where,
+      where: {
+        ...where,
+        // paid
+        paid_until: { gt: 0 },
+        // and either
+        OR: [
+          // not canceled
+          { cancel_tm: 0 },
+          // or canceled but not yet expired
+          { cancel_tm: { gt: 0 }, paid_until: { gt: now() } },
+        ],
+      },
     });
   }
 
-  public async listInvoices(where: { pubkey: string, id?: { in: string[] } }): Promise<Invoice[]> {
+  public async listInvoices(params: {
+    pubkey: string;
+    paid?: boolean;
+    id?: { in: string[] };
+  }): Promise<Invoice[]> {
+    const where: any = { pubkey: params.pubkey, id: params.id, due_timestamp: { gt: 0 } };
+    if (params.paid !== undefined) {
+      where.paid_timestamp = params.paid ? { gt: 0 } : 0;
+      if (params.paid)
+        delete where.due_timestamp;
+    }
     return await this.prisma.invoices.findMany({
       where,
     });
   }
 
-  public async listOrders(where: {
+  public async listOrders(params: {
     pubkey: string;
     id?: string;
   }): Promise<Order[]> {
+    const where: any = { ...params };
+    if (!params.id) {
+      where.paid_timestamp = { gt: 0 };
+    }
     return await this.prisma.orders.findMany({
       where,
     });
@@ -75,6 +100,17 @@ export class BillingDB {
     return this.prisma.orders.findFirst({
       where: {
         id,
+      },
+    });
+  }
+
+  public async cancelService(id: string) {
+    return this.prisma.services.update({
+      where: {
+        id: id,
+      },
+      data: {
+        cancel_tm: now(),
       },
     });
   }

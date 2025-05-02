@@ -27,7 +27,7 @@ export class Zaprite {
   }) {
     const body = {
       amount: order.amount,
-      currency: order.unit,
+      currency: order.unit.toUpperCase(),
       externalUniqId: order.id,
       label: order.label,
       customerData: {
@@ -35,6 +35,7 @@ export class Zaprite {
       }
     };
     const r = await this.fetch("/v1/order", body);
+    console.log("zaprite order result", body, r);
     if (r.status !== 200) throw new Error("Failed to create zaprite order");
     const data = await r.json();
     console.log("zaprite order created", data);

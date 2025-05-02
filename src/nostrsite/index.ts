@@ -1,5 +1,5 @@
 // @ts-ignore
-import { NostrSiteRenderer, parseAddr } from "libnostrsite";
+import { NostrSiteRenderer, parseAddr, StoreObject } from "libnostrsite";
 import { INDEX_URL } from "../common/const";
 import fs from "fs";
 import path from "path";
@@ -124,24 +124,34 @@ export async function renderWebsite(
     });
     console.warn(Date.now(), "renderer loaded site", renderer.settings);
 
+    const isPartial = !!onlyPaths.length;
+
     const site = renderer.settings!;
     // convert onlyPaths to actual paths:
     // parse each path as route, find matching event by id or slug,
     // return actual path.
     const paths: string[] = [];
+
+    // always rerender homepage, what else?
+    if (isPartial) paths.push(...["/"]);
+
+    // specified pages
     for (const p of onlyPaths) {
       const path = await renderer.normalizePath(p);
       paths.push(path);
     }
     console.warn("only paths normalized", paths, "input", onlyPaths);
 
+    const sitemapPaths: string[] = await renderer.getSiteMap(limit);
+
     // only write sitemap if we've loaded the whole site
     if (!limit) {
-      const sitemapPaths: string[] = await renderer.getSiteMap(limit);
-      paths.push(...sitemapPaths);
-
       const sitemap = sitemapPaths.map((p) => `${site.origin}${p}`).join("\n");
       fs.writeFileSync(`${dir}/sitemap.txt`, sitemap, { encoding: "utf-8" });
+
+      paths.push(...sitemapPaths);
+    } else {
+      if (!isPartial) paths.push(...sitemapPaths.slice(0, limit));
     }
 
     // FIXME later on read from file events!
@@ -234,7 +244,10 @@ export async function renderWebsite(
     });
 
     // render using hbs and replace document.html
-    for (const p of paths) {
+    const knownPaths = new Set<string>(...paths);
+    while (paths.length) {
+      const p = paths.shift()!;
+
       const { result, context } = await renderer.render(p);
       // 404? event deleted - add path for deletion? fuck :(
       // we can't normalize path without loading an event,
@@ -242,10 +255,11 @@ export async function renderWebsite(
       if (context.context.includes("error")) {
         // FIXME DELETED EVENT!!!
         // hmm... doesn't our ssr uploaded delete all existing files
-        // after uploading the new render?
-
+        // after uploading the new render? 
+        // NO, not for isPartial renders!
         continue;
       }
+
       let file = p;
       if (file === "/") file = "/index";
       else if (file.endsWith("/")) file = file.substring(0, file.length - 1);
@@ -269,6 +283,26 @@ export async function renderWebsite(
           result.length
         );
         fs.writeFileSync(dir + rssFile, result, { encoding: "utf-8" });
+      }
+
+      if (context.object) {
+        const add = (arr: StoreObject[]) => {
+          for (const a of arr) {
+            if (!knownPaths.has(a.url)) {
+              knownPaths.add(a.url);
+              paths.push(a.url);
+            }
+          }
+        };
+
+        if (context.object.authors) {
+          console.warn("object authors", context.object.id, context.object.authors.map(a => a.url));;
+          add(context.object.authors);
+        }
+        if (context.object.tags) {
+          console.warn("object tags", context.object.id, context.object.tags.map(a => a.url));;
+          add(context.object.tags);
+        }
       }
     }
     console.warn("done");

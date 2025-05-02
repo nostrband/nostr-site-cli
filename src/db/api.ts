@@ -3,10 +3,9 @@ import { STATUS_DEPLOYED } from "../common/const";
 import { parseNaddr } from "../nostr";
 import { AddressPointer } from "nostr-tools/lib/types/nip19";
 import { nip19 } from "nostr-tools";
-import { prisma } from "./prisma"
+import { prisma } from "./prisma";
 
 export class ApiDB {
-
   private prisma = prisma;
 
   constructor() {}
@@ -283,5 +282,31 @@ export class ApiDB {
       },
     });
     console.log("fetched counts", ec, nc);
+  }
+
+  public async setData(pubkey: string, key: string, value: string) {
+    await this.prisma.data.upsert({
+      where: { pubkey_key: { pubkey, key } },
+      create: {
+        pubkey,
+        key,
+        value,
+        timestamp: Date.now(),
+      },
+      update: {
+        value,
+        timestamp: Date.now(),
+      },
+    });
+  }
+
+  public async getData(pubkey: string, key: string) {
+    return (
+      (
+        await this.prisma.data.findFirst({
+          where: { pubkey, key },
+        })
+      )?.value || ""
+    );
   }
 }

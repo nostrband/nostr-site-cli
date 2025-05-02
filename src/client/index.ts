@@ -105,3 +105,28 @@ export async function checkDomain(domain: string, site: string) {
   console.log(Date.now(), "check", reply);
   return reply;
 }
+
+export async function checkAttachedDomain(site: string, domain: string) {
+  const reply = await fetchWithSession(
+    `${NPUB_PRO_API}/attach?domain=${domain}&site=${site}`
+  );
+  console.log(Date.now(), "check", reply);
+  return reply;
+}
+
+export async function setData(key: string, value: string) {
+  const reply = await fetchWithSession(
+    `${NPUB_PRO_API}/data?key=${key}&value=${value}`, "POST"
+  );
+  console.log(Date.now(), "set data", reply);
+  return reply;
+}
+
+export async function getData(key: string) {
+  const reply = await fetchWithSession(
+    `${NPUB_PRO_API}/data?key=${key}`, "GET"
+  );
+  console.log(Date.now(), "get data", reply);
+  return reply;
+}
+

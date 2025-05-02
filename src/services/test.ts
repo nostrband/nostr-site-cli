@@ -24,6 +24,7 @@ import { LB } from "../aws/lb";
 import childProcess from "child_process";
 import secrets from "secrets.js-grempe"
 import { zipSiteDir } from "../zip";
+import { SES } from "../aws/ses";
 
 function testSessionToken(pubkey: string) {
   const token = createSessionToken(pubkey);
@@ -391,6 +392,13 @@ async function testBuyPro(site: string) {
   console.log("r", r);
 }
 
+async function testSendEmail(email: string, subject: string, html: string) {
+  const ses = new SES();
+  const testArn = "arn:aws:ses:eu-north-1:945458476897:identity/newsletters.npub.pro";
+  const fromEmail = "brugeman@newsletters.npub.pro";
+  return ses.sendEmail(testArn, fromEmail, email, subject, html);
+}
+
 export async function testMain(argv: string[]) {
   console.log("test", argv);
 
@@ -442,5 +450,10 @@ export async function testMain(argv: string[]) {
   } else if (method === "buy_pro") {
     const site = argv[1];
     return testBuyPro(site);
+  } else if (method === "send_email") {
+    const email = argv[1];
+    const subject = argv[2];
+    const html = argv[3];
+    return testSendEmail(email, subject, html);
   }
 }

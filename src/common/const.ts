@@ -47,6 +47,7 @@ export const LB_LISTENER_ARN =
   "arn:aws:elasticloadbalancing:us-east-1:945458476897:listener/app/TestEC2/f1119f64affd9926/de35c314bced9a29";
 
 export const NPUB_PRO_API = "https://api.npubpro.com";
+//export const NPUB_PRO_API = "http://localhost:8888";
 export const NPUB_PRO_DOMAIN = "npub.pro";
 
 export const ZAPRITE_API = "https://api.zaprite.com";
@@ -104,6 +105,7 @@ export const BROADCAST_RELAYS = ["wss://nostr.mutinywallet.com/"];
 
 export const SITE_RELAY = "wss://relay.npubpro.com";
 export const SITE_RELAYS = [SITE_RELAY, "wss://relay.nostr.band/all"];
+export const SEARCH_RELAYS = ["wss://relay.nostr.band/all"];
 
 export const INDEX_URL = "https://cdn.npubpro.com/index.js";
 

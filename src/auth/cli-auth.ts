@@ -1,14 +1,16 @@
 import os from "os";
 import fs from "fs";
 import readline from "node:readline";
-import NDK, { NDKNip46Signer, NDKPrivateKeySigner } from "@nostr-dev-kit/ndk";
+import NDK from "@nostr-dev-kit/ndk";
 import { generatePrivateKey, nip19 } from "nostr-tools";
 import { createNip98AuthEvent } from "../nostr";
+import { Nip46Signer } from "../nostr/nip46";
+import { PrivateKeySigner } from "../nostr/private-key-signer";
 
 export const cliHomedir = os.homedir();
 
 export let cliNdk: NDK;
-export let cliSigner: NDKNip46Signer;
+export let cliSigner: Nip46Signer;
 export let cliPubkey: string;
 
 // make sure current user is authed
@@ -27,11 +29,8 @@ export async function ensureAuth() {
       await cliNdk.connect();
       console.log("connected to relays", info.relays);
 
-      cliSigner = new NDKNip46Signer(
-        cliNdk,
-        info.pubkey,
-        new NDKPrivateKeySigner(privkey)
-      );
+      const localSigner = new PrivateKeySigner(privkey);
+      cliSigner = new Nip46Signer(cliNdk, info.pubkey, localSigner);
       // if connect is blocked then we must re-auth
       await Promise.race([
         cliSigner.blockUntilReady(),
@@ -82,10 +81,10 @@ export async function ensureAuth() {
   console.log("connected to relays", relays);
 
   const privkey = generatePrivateKey();
-  cliSigner = new NDKNip46Signer(
+  cliSigner = new Nip46Signer(
     cliNdk,
     pubkey,
-    new NDKPrivateKeySigner(privkey)
+    new PrivateKeySigner(privkey)
   );
   cliSigner.token = secret;
   cliSigner.on("authUrl", (url) =>

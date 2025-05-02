@@ -1,8 +1,7 @@
 import NDK, { NDKEvent, NDKRelay, NDKRelayStatus } from "@nostr-dev-kit/ndk";
 import {
   KIND_PINNED_TO_SITE,
-  KIND_NOTE,
-  KIND_LONG_NOTE,
+  SUPPORTED_KINDS,
   KIND_SITE_SUBMIT,
   tags,
   tv,
@@ -10,7 +9,6 @@ import {
   // @ts-ignore
 } from "libnostrsite";
 import { BLACKLISTED_RELAYS } from "../common/const";
-import { shuffleArray } from "../common/utils";
 import { fetchRelayFilterSince } from ".";
 
 interface Author {
@@ -39,13 +37,15 @@ export class EventSync {
   }
 
   private contributors(site: NDKEvent) {
-    const pubkeys = tags(site, "p").map((t: string) => t[1]);
+    // contributors
+    const pubkeys: string[] = tags(site, "p").map((t: string) => t[1]);
+    // admin
+    pubkeys.push(site.pubkey);
+    // delegator
     const user = tv(site, "u");
-    if (!pubkeys.length) {
-      if (user) pubkeys.push(user);
-      else pubkeys.push(site.pubkey);
-    }
-    return pubkeys;
+    if (user) pubkeys.push(user);
+    // dedup
+    return [...new Set(pubkeys)];
   }
 
   private addSiteAuthor(pubkey: string, naddr: string, fetched?: number) {
@@ -211,8 +211,7 @@ export class EventSync {
               [url],
               {
                 kinds: [
-                  KIND_NOTE,
-                  KIND_LONG_NOTE,
+                  ...SUPPORTED_KINDS,
                   KIND_PINNED_TO_SITE,
                   KIND_SITE_SUBMIT,
                 ],

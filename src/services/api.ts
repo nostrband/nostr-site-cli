@@ -291,9 +291,7 @@ class Api {
 
     // must be reserved before deploy
     const info = await this.s3.fetchDomainInfo(domain);
-    if (!info) {
-      return sendError(res, "Domain not reserved", 400);
-    }
+    if (!info) return sendError(res, "Domain not reserved", 400);
 
     // must be already reserved for this website
     if (!canReserve(domain, admin, addr, info))
@@ -554,6 +552,27 @@ class Api {
     return false;
   }
 
+  private async checkAttachedDomain(
+    domain: string,
+    cfEndpoint: string
+  ): Promise<"www" | "true" | ""> {
+    const recs = await dnsResolveNoCache(domain, "CNAME");
+    console.log("cname recs", domain, cfEndpoint, recs);
+    for (const r of recs) {
+      const kv = Array.isArray(r) ? r[0] : r;
+      if (kv.trim() === cfEndpoint) return "true";
+    }
+
+    const wwwRecs = await dnsResolveNoCache("www." + domain, "CNAME");
+    console.log("cname www recs", domain, cfEndpoint, wwwRecs);
+    for (const r of wwwRecs) {
+      const kv = Array.isArray(r) ? r[0] : r;
+      if (kv.trim() === cfEndpoint) return "www";
+    }
+
+    return "";
+  }
+
   private async sendCert(
     res: http.ServerResponse,
     domain: string,
@@ -723,12 +742,15 @@ class Api {
       site,
     });
 
-    // FIXME wait until CF deploys and DNS is updated
+    const cfEndpoint = dist.DomainName + ".";
+    // check dns settings done by the user (it's idempotent method)
+    const valid = await this.checkAttachedDomain(domain, cfEndpoint);
 
     return sendReply(res, {
-      cnameDomain: dist.DomainName + ".",
+      cnameDomain: cfEndpoint,
       redirectIps: AWS_GLOBAL_ACCEL_IPS,
-      status: dist.Status,
+      status: valid !== "" ? dist.Status : "Waiting for DNS settings",
+      www: valid === "www",
     });
   }
 
@@ -761,12 +783,14 @@ class Api {
       console.log("dist", dist);
       if (!dist) throw new Error("Attached CF not found!");
 
-      // FIXME check DNS is valid?
+      const cfEndpoint = dist.DomainName + ".";
+      const valid = await this.checkAttachedDomain(domain, cfEndpoint);
 
       return sendReply(res, {
-        cnameDomain: dist.DomainName + ".",
+        cnameDomain: cfEndpoint,
         redirectIps: AWS_GLOBAL_ACCEL_IPS,
-        status: dist.Status,
+        status: valid !== "" ? dist.Status : "Waiting for DNS settings",
+        www: valid === "www",
       });
     } else {
       // list of attached domains
@@ -1017,6 +1041,46 @@ class Api {
     });
   }
 
+  public async apiSetData(req: http.IncomingMessage, res: http.ServerResponse) {
+    if (req.method !== "POST") return sendError(res, "Use post", 400);
+
+    const admin = parseSession(req);
+    if (!admin) return sendError(res, "Auth please", 401);
+
+    const url = getReqUrl(req);
+    const key = url.searchParams.get("key");
+    const value = url.searchParams.get("value") || "";
+
+    if (!key) return sendError(res, "Specify key", 400);
+    if (value.length > 5000) return sendError(res, "Value too big", 400);
+
+    // FIXME this is a huge opportunity for abuse,
+    // so make sure to switch to nostr events for storage asap
+    await this.db.setData(admin, key, value);
+
+    sendReply(res, {
+      [key]: value,
+    });
+  }
+
+  public async apiGetData(req: http.IncomingMessage, res: http.ServerResponse) {
+    if (req.method !== "GET") return sendError(res, "Use post", 400);
+
+    const admin = parseSession(req);
+    if (!admin) return sendError(res, "Auth please", 401);
+
+    const url = getReqUrl(req);
+    const key = url.searchParams.get("key");
+
+    if (!key) return sendError(res, "Specify key", 400);
+
+    const value = await this.db.getData(admin, key);
+
+    sendReply(res, {
+      [key]: value,
+    });
+  }
+
   public async reservePubkeyDomain(pubkey: string, domain: string, months = 3) {
     if (!domain) {
       console.log("choosing domain");
@@ -1039,6 +1103,25 @@ class Api {
     const expires = Date.now() + months * 30 * 24 * 60 * 60 * 1000;
     domain = await this.reserve(undefined, pubkey, domain, expires, true);
     console.log("reserved", domain, "for", pubkey);
+  }
+
+  async changeDomainOwner(domain: string, pubkey: string) {
+    let info = await this.s3.fetchDomainInfo(domain);
+    console.log("existing info", info);
+
+    if (!info) throw new Error("No domain");
+    if (info.status !== STATUS_RELEASED) throw new Error("Not released");
+
+    info.pubkey = pubkey;
+
+    const data = await this.s3.putDomainInfo(
+      { ...info, pubkey },
+      STATUS_RELEASED,
+      Date.now() + 7 * 24 * 3600 * 1000
+    );
+
+    // ensure local copy of this domain
+    await this.db.upsertDomainInfo(data);
   }
 
   private async requestListener(
@@ -1079,6 +1162,9 @@ class Api {
       } else if (req.url.startsWith("/attach")) {
         if (req.method === "POST") await this.apiAttachDomain(req, res);
         else await this.apiGetAttachedDomains(req, res);
+      } else if (req.url.startsWith("/data")) {
+        if (req.method === "POST") await this.apiSetData(req, res);
+        else await this.apiGetData(req, res);
       } else {
         sendError(res, "Unknown method", 400);
       }
@@ -1105,6 +1191,11 @@ export async function apiMain(argv: string[]) {
     const months = parseInt(argv?.[3]) || 3;
     console.log(pubkey, domain, months);
     return api.reservePubkeyDomain(pubkey, domain, months);
+  } else if (method === "change_domain_owner") {
+    const domain = argv[1];
+    const pubkey = argv[2];
+    console.log(pubkey, domain);
+    return api.changeDomainOwner(domain, pubkey);
   } else if (method === "run") {
     const host = argv[1];
     const port = parseInt(argv[2]);

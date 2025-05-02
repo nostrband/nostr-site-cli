@@ -57,7 +57,12 @@ class BillingApi {
     const admin = parseSession(req);
     if (!admin) return sendError(res, "Auth please", 401);
 
-    const invoices = await this.billingDB.listInvoices({ pubkey: admin });
+    const url = getReqUrl(req);
+    let paid;
+    if (url.searchParams.get("paid"))
+      paid = url.searchParams.get("paid") === "true";
+
+    const invoices = await this.billingDB.listInvoices({ pubkey: admin, paid });
     sendReply(res, {
       invoices,
     });
@@ -70,9 +75,32 @@ class BillingApi {
     const admin = parseSession(req);
     if (!admin) return sendError(res, "Auth please", 401);
 
-    const orders = await this.billingDB.listOrders({ pubkey: admin });
+    const url = getReqUrl(req);
+    const id = url.searchParams.get("site") || undefined;
+
+    const orders = await this.billingDB.listOrders({ pubkey: admin, id });
     sendReply(res, {
       orders,
+    });
+  }
+
+  private async unsubscribe(
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ) {
+    const admin = parseSession(req);
+    if (!admin) return sendError(res, "Auth please", 401);
+
+    const url = getReqUrl(req);
+
+    const serviceId = url.searchParams.get("service");
+    if (!serviceId) return sendError(res, "Specify service", 400);
+
+    console.log("id", serviceId);
+    const service = await this.billingDB.cancelService(serviceId);
+    console.log("service", service);
+    sendReply(res, {
+      service,
     });
   }
 
@@ -246,9 +274,6 @@ class BillingApi {
     const z_order = await this.zaprite.getOrder(data.orderId);
     if (!z_order) throw new Error("Zaprite order not found");
 
-    // FIXME DEBUG
-    console.log("FIXME FAKE ORDER STATUS!!!");
-    z_order.status = "COMPLETE";
     console.log("got zaprite order", z_order);
 
     let error = "";
@@ -310,13 +335,18 @@ class BillingApi {
         await this.listInvoices(req, res);
       } else if (req.url.startsWith("/orders")) {
         await this.listOrders(req, res);
+      } else if (req.url.startsWith("/unsubscribe")) {
+        if (req.method === "POST") await this.unsubscribe(req, res);
+        else sendError(res, "Use POST", 400);
       } else if (req.url.startsWith("/pro")) {
         if (req.method === "POST") await this.buySitePro(req, res);
+        else sendError(res, "Use POST", 400);
       } else if (req.url.startsWith("/order")) {
         if (req.method === "POST") await this.createOrder(req, res);
+        else sendError(res, "Use POST", 400);
       } else if (req.url.startsWith(this.zapriteHookUrl())) {
         if (req.method === "POST") await this.zapriteHook(req, res);
-        else throw new Error("Bad method");
+        else sendError(res, "Use POST", 400);
       } else {
         sendError(res, "Unknown method", 400);
       }
