@@ -74,7 +74,7 @@ export class BillingDB {
       data,
     });
   }
-
+  
   public async createInvoice(data: Invoice) {
     return this.prisma.invoices.create({
       data,

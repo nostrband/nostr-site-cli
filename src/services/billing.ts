@@ -191,6 +191,47 @@ class BillingApi {
     });
   }
 
+  private async createTestInvoice(
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ) {
+    const admin = parseSession(req);
+    if (!admin) return sendError(res, "Auth please", 401);
+
+    const url = getReqUrl(req);
+
+    const invoiceId = url.searchParams.get("invoiceId");
+    if (!invoiceId) return sendError(res, "Specify invoice id", 400);
+
+    const prices = await this.billingDB.listPrices({
+      type: PRICE_TYPE_SITE,
+    });
+    if (!prices || !prices.length) throw new Error("No prices");
+
+    // FIXME hmm... why first one?
+    const price = prices[0];
+
+    const invoice: Invoice = {
+      id: uuidv4(),
+      pubkey: admin,
+      service_id: invoiceId,
+      due_timestamp: 0,
+      price_id: price.id,
+      amount: price.amount,
+      unit: price.unit,
+      period: price.period,
+      paid_order_id: "",
+      paid_timestamp: 0,
+      timestamp: now(),
+    };
+    await this.billingDB.createInvoice(invoice);
+
+
+    sendReply(res, {
+      invoice,
+    });
+  }
+
   private async createOrder(
     req: http.IncomingMessage,
     res: http.ServerResponse
@@ -340,6 +381,9 @@ class BillingApi {
         else sendError(res, "Use POST", 400);
       } else if (req.url.startsWith("/pro")) {
         if (req.method === "POST") await this.buySitePro(req, res);
+        else sendError(res, "Use POST", 400);
+      } else if (req.url.startsWith("/create-test-invoice")) {
+        if (req.method === "POST") await this.createTestInvoice(req, res);
         else sendError(res, "Use POST", 400);
       } else if (req.url.startsWith("/order")) {
         if (req.method === "POST") await this.createOrder(req, res);
