@@ -211,11 +211,20 @@ class BillingApi {
     // FIXME hmm... why first one?
     const price = prices[0];
 
+    const today = new Date();
+
+    const futureDate = new Date(today);
+    futureDate.setDate(today.getDate() + 2);
+
+    const due_timestamp = futureDate.getTime();
+
+    const timestampInSeconds = Math.floor(due_timestamp / 1000);
+
     const invoice: Invoice = {
       id: uuidv4(),
       pubkey: admin,
       service_id: invoiceId,
-      due_timestamp: 0,
+      due_timestamp: timestampInSeconds,
       price_id: price.id,
       amount: price.amount,
       unit: price.unit,
