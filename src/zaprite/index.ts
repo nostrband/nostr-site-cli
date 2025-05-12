@@ -1,6 +1,6 @@
 import { ZAPRITE_API } from "../common/const";
 
-export const PAYMENT_UNIT = "USD";
+export const PAYMENT_UNIT = "usd";
 
 export class Zaprite {
   private API_KEY = process.env.ZAPRITE_API_KEY;
@@ -20,7 +20,7 @@ export class Zaprite {
 
   public async createOrder(order: {
     amount: number,
-    unit: "USD",
+    unit: "usd",
     label: string,
     pubkey: string,
     id: string,
