@@ -115,6 +115,22 @@ export class BillingDB {
     });
   }
 
+  public async updatePaidUntilService(id: string) {
+    const now = new Date();
+    const dayBeforeYesterday = new Date(now);
+    dayBeforeYesterday.setDate(now.getDate() - 2);
+    const paid_until = Math.floor(dayBeforeYesterday.getTime() / 1000);
+    
+    return this.prisma.services.update({
+      where: {
+        id: id,
+      },
+      data: {
+        paid_until,
+      },
+    });
+  }
+
   public async setPaidOrder(order: Order) {
     order.paid_timestamp = now();
     const invoice_ids = order.invoice_ids.split(",");
