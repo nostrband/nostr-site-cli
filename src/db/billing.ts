@@ -74,7 +74,7 @@ export class BillingDB {
       data,
     });
   }
-
+  
   public async createInvoice(data: Invoice) {
     return this.prisma.invoices.create({
       data,
@@ -111,6 +111,22 @@ export class BillingDB {
       },
       data: {
         cancel_tm: now(),
+      },
+    });
+  }
+
+  public async updatePaidUntilService(id: string) {
+    const now = new Date();
+    const dayBeforeYesterday = new Date(now);
+    dayBeforeYesterday.setDate(now.getDate() - 2);
+    const paid_until = Math.floor(dayBeforeYesterday.getTime() / 1000);
+    
+    return this.prisma.services.update({
+      where: {
+        id: id,
+      },
+      data: {
+        paid_until,
       },
     });
   }
